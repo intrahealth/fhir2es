@@ -1,0 +1,30 @@
+{
+  "name": "fhir2es",
+  "version": "1.1.0",
+  "description": "Reads and caches fhir data to elasticsearch",
+  "main": "reports.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/iHRIS/fhir2es.git"
+  },
+  "keywords": [
+    "fhir",
+    "elasticsearch"
+  ],
+  "author": "Ally Shaban and Luke Duncan",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/iHRIS/iHRIS/issues"
+  },
+  "homepage": "https://github.com/iHRIS/fhir2es/blob/master/README.md",
+  "dependencies": {
+    "async": "^3.2.0",
+    "axios": "^0.19.2",
+    "fhir": "^4.7.3",
+    "lodash": "^4.17.15",
+    "urijs": "^1.19.2"
+  }
+}
