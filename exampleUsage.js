@@ -1,6 +1,6 @@
 const env = process.env.NODE_ENV || 'development';
 var config = require(`/home/ally/emNutt/server/config/config_${env}.json`);
-const { CacheFhirToES } = require('fhir2es')
+const { CacheFhirToES } = require('./reports')
 
 let caching = new CacheFhirToES({
   ESBaseURL: config.elastic.baseURL,

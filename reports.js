@@ -25,7 +25,7 @@ class CacheFhirToES {
     this.FHIRPassword = FHIRPassword
   }
 
-  flattenComplex (extension) {
+  flattenComplex(extension) {
     let results = {};
     for (let ext of extension) {
       let value = '';
@@ -55,7 +55,7 @@ class CacheFhirToES {
    *
    * @param {relativeURL} reference //reference must be a relative url i.e Practioner/10
    */
-  getResourceFromReference (reference) {
+  getResourceFromReference(reference) {
     return new Promise((resolve) => {
       let url = URI(this.FHIRBaseURL)
         .segment(reference)
@@ -85,7 +85,7 @@ class CacheFhirToES {
    * @param {Array} extension
    * @param {String} element
    */
-  getElementValFromExtension (extension, element) {
+  getElementValFromExtension(extension, element) {
     return new Promise((resolve) => {
       let elementValue = ''
       async.each(extension, (ext, nxtExt) => {
@@ -118,7 +118,7 @@ class CacheFhirToES {
     })
   }
 
-  getImmediateLinks (orderedResources, links, callback) {
+  getImmediateLinks(orderedResources, links, callback) {
     if (orderedResources.length - 1 === links.length) {
       return callback(orderedResources);
     }
@@ -152,7 +152,7 @@ class CacheFhirToES {
     });
   };
 
-  getReportRelationship (callback) {
+  getReportRelationship(callback) {
     let url = URI(this.FHIRBaseURL)
       .segment('Basic');
     url.addQuery('code', 'iHRISRelationship');
@@ -174,7 +174,7 @@ class CacheFhirToES {
       });
   };
 
-  updateESCompilationsRate (callback) {
+  updateESCompilationsRate(callback) {
     console.log('Setting maximum compilation rate');
     let url = URI(this.ESBaseURL).segment('_cluster').segment('settings').toString();
     let body = {
@@ -206,7 +206,7 @@ class CacheFhirToES {
       })
   }
 
-  createESIndex (name, IDFields, callback) {
+  createESIndex(name, IDFields, callback) {
     console.info('Checking if index ' + name + ' exists');
     let url = URI(this.ESBaseURL)
       .segment(name.toString().toLowerCase())
@@ -269,7 +269,7 @@ class CacheFhirToES {
       });
   };
 
-  updateESDocument (body, record, index, orderedResource, resourceId, callback) {
+  updateESDocument(body, record, index, orderedResource, resourceId, callback) {
     let url = URI(this.ESBaseURL).segment(index).segment('_update_by_query').toString();
     axios({
       method: 'post',
@@ -331,7 +331,7 @@ class CacheFhirToES {
     });
   }
 
-  cache () {
+  cache() {
     this.getReportRelationship((err, relationships) => {
       if (err) {
         return;
@@ -352,12 +352,12 @@ class CacheFhirToES {
           let flattenedLink1 = this.flattenComplex(link1.extension);
           let linkTo1 = flattenedLink1.linkTo.split('.')
           let linkToResource1 = linkTo1[0]
-          if(linkToResource1 === reportDetails.name) {
+          if (linkToResource1 === reportDetails.name) {
             let name
-            if(linkTo1.length === 1) {
+            if (linkTo1.length === 1) {
               name = 'id'
             } else {
-              linkTo1.splice(0,1)
+              linkTo1.splice(0, 1)
               name = linkTo1.join('.')
             }
             details.extension.push({
@@ -386,10 +386,10 @@ class CacheFhirToES {
             let linkToResource2 = linkTo2[0]
             if (linkToResource2 === flattenedLink1.name) {
               let name
-              if(linkTo2.length === 1) {
+              if (linkTo2.length === 1) {
                 name = 'id'
               } else {
-                linkTo2.splice(0,1)
+                linkTo2.splice(0, 1)
                 name = linkTo2.join('.')
               }
               links[linkIndex1].extension.push({
@@ -490,15 +490,15 @@ class CacheFhirToES {
                         let limits = query.split('=');
                         let limitParameters = limits[0];
                         let limitValue = limits[1];
-                        if(!limitValue) {
+                        if (!limitValue) {
                           limitValue = ''
                         }
                         let resourceValue = fhir.evaluate(data.resource, limitParameters);
-                        if(Array.isArray(resourceValue) && !resourceValue.includes(limitValue)) {
+                        if (Array.isArray(resourceValue) && !resourceValue.includes(limitValue)) {
                           return next()
-                        } else if(limitValue && !resourceValue) {
+                        } else if (limitValue && !resourceValue) {
                           return next()
-                        } else if(resourceValue.toString() != limitValue.toString()) {
+                        } else if (resourceValue.toString() != limitValue.toString()) {
                           return next()
                         }
                       }
@@ -553,7 +553,7 @@ class CacheFhirToES {
                                 value = JSON.stringify(value)
                               }
                             }
-                            if(fieldName === 'id') {
+                            if (fieldName === 'id') {
                               value = data.resource.resourceType + '/' + value
                             }
                             record[fieldLabel] = value
@@ -564,7 +564,7 @@ class CacheFhirToES {
                         if (orderedResource.hasOwnProperty('linkElement')) {
                           let linkElement = orderedResource.linkElement.replace(orderedResource.resource + '.', '');
                           let linkTo = fhir.evaluate(data.resource, linkElement);
-                          if(linkElement === 'id') {
+                          if (linkElement === 'id') {
                             linkTo = orderedResource.resource + '/' + linkTo
                           }
                           match['__' + orderedResource.name + '_link'] = linkTo;
@@ -573,6 +573,17 @@ class CacheFhirToES {
                         }
                         let ctx = '';
                         for (let field in record) {
+                          // cleaning to escape ' char
+                          if (record[field]) {
+                            let recordFieldArr = record[field].split('')
+                            for (let recordFieldIndex in recordFieldArr) {
+                              let char = recordFieldArr[recordFieldIndex]
+                              if (char === "'") {
+                                recordFieldArr[recordFieldIndex] = "\\'"
+                              }
+                            }
+                            record[field] = recordFieldArr.join('')
+                          }
                           ctx += 'ctx._source.' + field + "='" + record[field] + "';";
                         }
 
