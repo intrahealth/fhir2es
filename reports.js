@@ -269,66 +269,217 @@ class CacheFhirToES {
       });
   };
 
-  updateESDocument(body, record, index, orderedResource, resourceId, callback) {
-    let url = URI(this.ESBaseURL).segment(index).segment('_update_by_query').toString();
-    axios({
-      method: 'post',
-      url,
-      data: body,
-      auth: {
-        username: this.ESUsername,
-        password: this.ESPassword,
-      },
-    }).then(response => {
-      // if nothing was updated and its from the primary (top) resource then create as new
-      if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
-        console.info('No record with id ' + resourceId + ' found on elastic search, creating new');
-        let url = URI(this.ESBaseURL)
-          .segment(index)
-          .segment('_doc')
-          .toString();
+  updateESDocument(body, record, index, orderedResource, resourceId, multiple, callback) {
+    async.series({
+      addNewRows: (callback) => {
+        if(!orderedResource.hasOwnProperty('linkElement') || !multiple) {
+          return callback(null)
+        }
+        let url = URI(this.ESBaseURL).segment(index).segment('_search').addQuery('size', 10000).toString()
         axios({
-            method: 'post',
-            url,
-            data: record,
-            auth: {
-              username: this.ESUsername,
-              password: this.ESPassword,
-            },
-          })
-          .then(response => {
-            return callback();
-          })
-          .catch(err => {
-            console.log('Error occured while saving document into ES');
-            console.log(err);
-            return callback();
-          });
-      } else {
-        return callback();
-      }
-    }).catch(err => {
-      if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-        console.log('Conflict occured, rerunning this request');
-        setTimeout(() => {
-          this.updateESDocument(body, record, index, orderedResource, resourceId, () => {
-            return callback()
-          })
-        }, 2000)
-      } else {
-        console.log('Error Occured while creating ES document');
-        if (err.response && err.response.data) {
-          console.error(err.response.data);
-        }
-        if (err.error) {
-          console.error(err.error);
-        }
-        if (!err.response) {
+          method: 'GET',
+          url,
+          auth: {
+            username: this.ESUsername,
+            password: this.ESPassword,
+          },
+          data: {
+            query: {
+              terms: body.query.terms
+            }
+          }
+        }).then((response) => {
+          let newRowBody = {}
+          // take the last field because it is the ID
+          let recordFields = Object.keys(record)
+          let checkField = recordFields[recordFields.length - 1]
+          for(let linkField in body.query.terms) {
+            for(let index in body.query.terms[linkField]) {
+              // create new row only if there is no checkField or checkField exist but it is different
+              let updateThis = response.data.hits.hits.find((hit) => {
+                return hit['_source'][linkField] === body.query.terms[linkField][index] && (!hit['_source'][checkField] || hit['_source'][checkField] === record[checkField])
+              })
+              if(!updateThis) {
+                let hit = response.data.hits.hits.find((hit) => {
+                  return hit['_source'][linkField] === body.query.terms[linkField][index]
+                })
+                if(!hit) {
+                  continue;
+                }
+                for(let field in hit['_source']) {
+                  newRowBody[field] = hit['_source'][field]
+                }
+                for(let recField in record) {
+                  newRowBody[recField] = record[recField]
+                }
+                body.query.terms[linkField].splice(index, 1)
+              }
+            }
+          }
+          if(Object.keys(newRowBody).length > 0) {
+            let url = URI(this.ESBaseURL).segment(index).segment('_doc').toString()
+            axios({
+              method: 'POST',
+              url,
+              auth: {
+                username: this.ESUsername,
+                password: this.ESPassword,
+              },
+              data: newRowBody
+            }).then((response) => {
+              return callback(null)
+            }).catch((err) => {
+              console.log(err);
+              return callback(null)
+            })
+          } else {
+            return callback(null)
+          }
+        }).catch((err) => {
           console.log(err);
+          return callback(null)
+        })
+      },
+      updateRow: (callback) => {
+        // for multiple rows, ensure that we dont update all rows but just one row
+        let bodyData = {}
+        let recordFields = Object.keys(record)
+        let idField = recordFields[recordFields.length - 1]
+        if(multiple) {
+          let termField = Object.keys(body.query.terms)[0]
+          bodyData = {
+            query: {
+              bool: {
+                must: []
+              }
+            }
+          }
+          let must1 = {
+            terms: {}
+          }
+          must1.terms[termField] = body.query.terms[termField]
+          bodyData.query.bool.must.push(must1)
+          let must2 = {
+            terms: {}
+          }
+          must2.terms[idField] = [record[idField]]
+          bodyData.query.bool.must.push(must2)
+          bodyData.script = body.script
+        } else {
+          bodyData = body
         }
-        return callback();
+        let url = URI(this.ESBaseURL).segment(index).segment('_update_by_query').toString();
+        async.series({
+          updateDocMissingField: (callback) => {
+            if(!multiple) {
+              return callback(null)
+            }
+            let updBodyData = _.cloneDeep(bodyData)
+            updBodyData.query.bool.must.splice(1, 1)
+            updBodyData.query.bool.must_not = {
+              exists: {}
+            }
+            updBodyData.query.bool.must_not.exists.field = idField
+            axios({
+              method: 'post',
+              url,
+              data: updBodyData,
+              auth: {
+                username: this.ESUsername,
+                password: this.ESPassword,
+              },
+            }).then(response => {
+              return callback(null)
+            }).catch(err => {
+              if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
+                console.log('Conflict occured, rerunning this request');
+                setTimeout(() => {
+                  this.updateESDocument(body, record, index, orderedResource, resourceId, multiple, () => {
+                    return callback(null)
+                  })
+                }, 2000)
+              } else {
+                console.log('Error Occured while creating ES document');
+                if (err.response && err.response.data) {
+                  console.error(err.response.data);
+                }
+                if (err.error) {
+                  console.error(err.error);
+                }
+                if (!err.response) {
+                  console.log(err);
+                }
+                return callback(null)
+              }
+            });
+          },
+          updateDocHavingField: (callback) => {
+            axios({
+              method: 'post',
+              url,
+              data: bodyData,
+              auth: {
+                username: this.ESUsername,
+                password: this.ESPassword,
+              },
+            }).then(response => {
+              // if nothing was updated and its from the primary (top) resource then create as new
+              if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
+                console.info('No record with id ' + resourceId + ' found on elastic search, creating new');
+                let url = URI(this.ESBaseURL)
+                  .segment(index)
+                  .segment('_doc')
+                  .toString();
+                axios({
+                    method: 'post',
+                    url,
+                    data: record,
+                    auth: {
+                      username: this.ESUsername,
+                      password: this.ESPassword,
+                    },
+                  })
+                  .then(response => {
+                    return callback(null)
+                  })
+                  .catch(err => {
+                    console.log('Error occured while saving document into ES');
+                    console.log(err);
+                    return callback(null)
+                  });
+              } else {
+                return callback(null)
+              }
+            }).catch(err => {
+              if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
+                console.log('Conflict occured, rerunning this request');
+                setTimeout(() => {
+                  this.updateESDocument(body, record, index, orderedResource, resourceId, multiple, () => {
+                    return callback(null)
+                  })
+                }, 2000)
+              } else {
+                console.log('Error Occured while creating ES document');
+                if (err.response && err.response.data) {
+                  console.error(err.response.data);
+                }
+                if (err.error) {
+                  console.error(err.error);
+                }
+                if (!err.response) {
+                  console.log(err);
+                }
+                return callback(null)
+              }
+            });
+          }
+        }, () => {
+          return callback(null)
+        })
       }
-    });
+    }, () => {
+      return callback()
+    })
   }
 
   cache() {
@@ -341,6 +492,9 @@ class CacheFhirToES {
         return;
       }
       relationships.entry.forEach(relationship => {
+        if(relationship.resource.id !== 'ihris-es-report-mhero-send-message') {
+          return
+        }
         console.info('processing relationship ID ' + relationship.resource.id);
         relationship = relationship.resource;
         let details = relationship.extension.find(ext => ext.url === 'http://ihris.org/fhir/StructureDefinition/iHRISReportDetails');
@@ -429,7 +583,6 @@ class CacheFhirToES {
                 let url = URI(this.FHIRBaseURL)
                   .segment(orderedResource.resource)
                   .segment('_history');
-                // url.addQuery('_count', 500);
                 url = url.toString();
                 let resourceData = [];
                 console.info(`Getting data for resource ${orderedResource.name}`);
@@ -504,59 +657,61 @@ class CacheFhirToES {
                       }
                       let record = {};
                       (async () => {
-                        for (let element of orderedResource["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
-                          let fieldLabel
-                          let fieldName
-                          let fieldAutogenerated = false
-                          for (let el of element) {
-                            let value = '';
-                            for (let key of Object.keys(el)) {
-                              if (key !== 'url') {
-                                value = el[key];
-                              }
-                            }
-                            if (el.url === "label") {
-                              let fleldChars = value.split(' ')
-                              //if label has space then format it
-                              if (fleldChars.length > 1) {
-                                fieldLabel = value.toLowerCase().split(' ').map(word => word.replace(word[0], word[0].toUpperCase())).join('');
-                              } else {
-                                fieldLabel = value
-                              }
-                            } else if (el.url === "name") {
-                              fieldName = value
-                            } else if (el.url === "autoGenerated") {
-                              fieldAutogenerated = value
-                            }
-                          }
-                          let displayData = fhir.evaluate(data.resource, fieldName);
-                          let value
-                          if ((!displayData || (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined)) && data.resource.extension) {
-                            value = await this.getElementValFromExtension(data.resource.extension, fieldName)
-                          } else if (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined) {
-                            value = undefined
-                          } else if (Array.isArray(displayData)) {
-                            value = displayData.pop();
-                          } else {
-                            value = displayData;
-                          }
-                          if (value || value === 0 || value === false) {
-                            if (typeof value == 'object') {
-                              if (value.reference && fieldAutogenerated) {
-                                value = value.reference
-                              } else if (value.reference && !fieldAutogenerated) {
-                                let referencedResource = await this.getResourceFromReference(value.reference);
-                                if (referencedResource) {
-                                  value = referencedResource.name
+                        if(orderedResource["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+                          for (let element of orderedResource["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+                            let fieldLabel
+                            let fieldName
+                            let fieldAutogenerated = false
+                            for (let el of element) {
+                              let value = '';
+                              for (let key of Object.keys(el)) {
+                                if (key !== 'url') {
+                                  value = el[key];
                                 }
-                              } else {
-                                value = JSON.stringify(value)
+                              }
+                              if (el.url === "label") {
+                                let fleldChars = value.split(' ')
+                                //if label has space then format it
+                                if (fleldChars.length > 1) {
+                                  fieldLabel = value.toLowerCase().split(' ').map(word => word.replace(word[0], word[0].toUpperCase())).join('');
+                                } else {
+                                  fieldLabel = value
+                                }
+                              } else if (el.url === "name") {
+                                fieldName = value
+                              } else if (el.url === "autoGenerated") {
+                                fieldAutogenerated = value
                               }
                             }
-                            if (fieldName === 'id') {
-                              value = data.resource.resourceType + '/' + value
+                            let displayData = fhir.evaluate(data.resource, fieldName);
+                            let value
+                            if ((!displayData || (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined)) && data.resource.extension) {
+                              value = await this.getElementValFromExtension(data.resource.extension, fieldName)
+                            } else if (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined) {
+                              value = undefined
+                            } else if (Array.isArray(displayData)) {
+                              value = displayData.pop();
+                            } else {
+                              value = displayData;
                             }
-                            record[fieldLabel] = value
+                            if (value || value === 0 || value === false) {
+                              if (typeof value == 'object') {
+                                if (value.reference && fieldAutogenerated) {
+                                  value = value.reference
+                                } else if (value.reference && !fieldAutogenerated) {
+                                  let referencedResource = await this.getResourceFromReference(value.reference);
+                                  if (referencedResource) {
+                                    value = referencedResource.name
+                                  }
+                                } else {
+                                  value = JSON.stringify(value)
+                                }
+                              }
+                              if (fieldName === 'id') {
+                                value = data.resource.resourceType + '/' + value
+                              }
+                              record[fieldLabel] = value
+                            }
                           }
                         }
                         record[orderedResource.name] = id
@@ -567,9 +722,16 @@ class CacheFhirToES {
                           if (linkElement === 'id') {
                             linkTo = orderedResource.resource + '/' + linkTo
                           }
+                          if(!Array.isArray(linkTo)) {
+                            if(!linkTo) {
+                              linkTo = []
+                            } else {
+                              linkTo = [linkTo]
+                            }
+                          }
                           match['__' + orderedResource.name + '_link'] = linkTo;
                         } else {
-                          match[orderedResource.name] = data.resource.resourceType + '/' + data.resource.id;
+                          match[orderedResource.name] = [data.resource.resourceType + '/' + data.resource.id];
                         }
                         let ctx = '';
                         for (let field in record) {
@@ -593,10 +755,11 @@ class CacheFhirToES {
                             source: ctx
                           },
                           query: {
-                            match,
+                            terms: match ,
                           },
                         };
-                        this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, () => {
+                        let multiple = orderedResource.multiple
+                        this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, () => {
                           return next()
                         })
                       })();
