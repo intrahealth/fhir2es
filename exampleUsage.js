@@ -1,4 +1,3 @@
-const env = process.env.NODE_ENV || 'development';
 const { CacheFhirToES } = require('./reports')
 
 let caching = new CacheFhirToES({

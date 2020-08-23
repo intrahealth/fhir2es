@@ -6,18 +6,16 @@ npm i fhir2es
 
 # Example Usage
 ```
-const { CacheFhirToES } = require('fhir2es')
-const env = process.env.NODE_ENV || 'development';
-var config = require(`emNutt/server/config/config_${env}.json`);
+const { CacheFhirToES } = require('./reports')
 
 let caching = new CacheFhirToES({
-  ESBaseURL: config.elastic.baseURL,
-  ESUsername: config.elastic.username,
-  ESPassword: config.elastic.password,
-  ESMaxCompilationRate: config.elastic.max_compilations_rate,
-  FHIRBaseURL: config.macm.baseURL,
-  FHIRUsername: config.macm.username,
-  FHIRPassword: config.macm.password
+  ESBaseURL: 'http://localhost:9200',
+  ESUsername: '',
+  ESPassword: '',
+  ESMaxCompilationRate: '10000/1m',
+  FHIRBaseURL: 'http://localhost:8081/scratchpad/fhir',
+  FHIRUsername: '',
+  FHIRPassword: ''
 })
 caching.cache()
 ```
