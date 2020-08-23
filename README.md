@@ -13,7 +13,7 @@ let caching = new CacheFhirToES({
   ESUsername: '',
   ESPassword: '',
   ESMaxCompilationRate: '10000/1m',
-  FHIRBaseURL: 'http://localhost:8081/scratchpad/fhir',
+  FHIRBaseURL: 'http://localhost:8081/hapi/fhir',
   FHIRUsername: '',
   FHIRPassword: ''
 })
