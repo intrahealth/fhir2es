@@ -6,7 +6,7 @@ npm i fhir2es
 
 # Example Usage
 ```
-const { CacheFhirToES } = require('./reports')
+const { CacheFhirToES } = require('fhir2es')
 
 let caching = new CacheFhirToES({
   ESBaseURL: 'http://localhost:9200',
