@@ -9,4 +9,6 @@ let caching = new CacheFhirToES({
   FHIRUsername: '',
   FHIRPassword: ''
 })
-caching.cache()
+caching.cache().then(() => {
+  console.log('Done')
+})
