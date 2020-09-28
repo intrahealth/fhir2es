@@ -18,7 +18,7 @@ class CacheFhirToES {
     FHIRUsername,
     FHIRPassword
   }) {
-    this.LastSyncTime = fs.readFileSync('./lastSync.time', 'utf8');
+    this.LastSyncTime = fs.readFileSync('./lastSync.time', 'utf8').trim();
     this.ESBaseURL = ESBaseURL
     this.ESUsername = ESUsername
     this.ESPassword = ESPassword
