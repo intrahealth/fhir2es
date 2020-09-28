@@ -16,7 +16,8 @@ class CacheFhirToES {
     ESMaxCompilationRate,
     FHIRBaseURL,
     FHIRUsername,
-    FHIRPassword
+    FHIRPassword,
+    relationshipsIDs
   }) {
     this.LastSyncTime = fs.readFileSync('./lastSync.time', 'utf8').trim();
     this.ESBaseURL = ESBaseURL
@@ -26,6 +27,7 @@ class CacheFhirToES {
     this.FHIRBaseURL = FHIRBaseURL
     this.FHIRUsername = FHIRUsername
     this.FHIRPassword = FHIRPassword
+    this.relationshipsIDs = relationshipsIDs
   }
 
   flattenComplex(extension) {
@@ -159,6 +161,9 @@ class CacheFhirToES {
     let url = URI(this.FHIRBaseURL)
       .segment('Basic');
     url.addQuery('code', 'iHRISRelationship');
+    for(let relationship of this.relationshipsIDs) {
+      url.addQuery('_id', relationship);
+    }
     url = url.toString();
     axios
       .get(url, {
@@ -492,7 +497,7 @@ class CacheFhirToES {
         if (err) {
           return;
         }
-        if (!relationships.entry || !Array.isArray(relationships.entry)) {
+        if ((!relationships.entry || !Array.isArray(relationships.entry)) && !relationships.resourceType === 'Bundle') {
           console.error('invalid resource returned');
           return;
         }

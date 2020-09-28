@@ -7,7 +7,8 @@ let caching = new CacheFhirToES({
   ESMaxCompilationRate: '10000/1m',
   FHIRBaseURL: 'http://localhost:8081/hapi4/fhir',
   FHIRUsername: '',
-  FHIRPassword: ''
+  FHIRPassword: '',
+  relationshipsIDs: ["mheroflowsummary"] //if not specified then all relationships will be processed
 })
 caching.cache().then(() => {
   console.log('Done')
