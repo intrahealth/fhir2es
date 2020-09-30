@@ -1,7 +1,6 @@
 {
   "name": "fhir2es",
-  "version": "1.2.4",
-  "description": "Reads and caches fhir data to elasticsearch",
+  "version": "1.2.55555 "description": "Reads and caches fhir data to elasticsearch",
   "main": "reports.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
