@@ -278,7 +278,91 @@ class CacheFhirToES {
       });
   };
 
-  updateESDocument(body, record, index, orderedResource, resourceId, multiple, callback) {
+  refreshIndex (index) {
+    return new Promise((resolve, reject) => {
+      console.info('Refreshing index ' + index);
+      const url = URI(this.ESBaseURL)
+        .segment(index)
+        .segment('_refresh')
+        .toString();
+      axios({
+        method: 'post',
+        url,
+        auth: {
+          username: this.ESUsername,
+          password: this.ESPassword,
+        },
+      }).then(response => {
+        console.log(`index ${index} refreshed`);
+        return resolve()
+      }).catch((err) => {
+        if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
+          console.log('Conflict occured, rerunning this request');
+          setTimeout(() => {
+            this.refreshIndex(index, (err) => {
+              if(err) {
+                return reject();
+              }
+              return resolve();
+            })
+          }, 2000)
+        } else {
+          console.log('Error Occured while refreshing index');
+          if (err.response && err.response.data) {
+            console.error(err.response.data);
+          }
+          if (err.error) {
+            console.error(err.error);
+          }
+          if (!err.response) {
+            console.log(err);
+          }
+          return reject();
+        }
+      });
+    })
+  };
+
+  async deleteESDocument(query, index, callback) {
+    await this.refreshIndex(index);
+    let url = URI(this.ESBaseURL).segment(index).segment('_delete_by_query').toString();
+    axios({
+      method: 'post',
+      url,
+      data: query,
+      auth: {
+        username: this.ESUsername,
+        password: this.ESPassword,
+      },
+    }).then(response => {
+      console.log(JSON.stringify(response.data,0,2));
+      return callback()
+    }).catch((err) => {
+      if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
+        console.log('Conflict occured, rerunning this request');
+        setTimeout(() => {
+          this.deleteESDocument(query, index, (err) => {
+            return callback(err)
+          })
+        }, 2000)
+      } else {
+        console.log('Error Occured while deleting ES document');
+        if (err.response && err.response.data) {
+          console.error(err.response.data);
+        }
+        if (err.error) {
+          console.error(err.error);
+        }
+        if (!err.response) {
+          console.log(err);
+        }
+        return callback(true)
+      }
+    });
+  };
+
+  async updateESDocument(body, record, index, orderedResource, resourceId, multiple, callback) {
+    await this.refreshIndex(index);
     async.series({
       addNewRows: (callback) => {
         if(!orderedResource.hasOwnProperty('linkElement') || !multiple) {
@@ -616,7 +700,6 @@ class CacheFhirToES {
                         if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
                           resourceData = resourceData.concat(response.data.entry);
                         }
-                        // url = false;
                         return callback(null, url);
                       }).catch(err => {
                         console.log('Error occured while getting resource data');
@@ -628,6 +711,7 @@ class CacheFhirToES {
                       console.log('Writting resource data for resource ' + orderedResource.resource + ' into elastic search');
                       let processedRecords = []
                       let count = 1
+                      resourceData.reverse()
                       async.eachSeries(resourceData, (data, next) => {
                         console.log('processing ' + count + '/' + resourceData.length + ' records of resource ' + orderedResource.resource);
                         count++
@@ -638,11 +722,10 @@ class CacheFhirToES {
                         let processed = processedRecords.find((record) => {
                           return record === id
                         })
-                        if (processed) {
-                          return next();
-                        } else {
+                        if (!processed) {
                           processedRecords.push(id)
                         }
+                        let deleteRecord = false;
                         let queries = [];
                         // just in case there are multiple queries
                         if (orderedResource.query) {
@@ -657,11 +740,26 @@ class CacheFhirToES {
                           }
                           let resourceValue = fhir.evaluate(data.resource, limitParameters);
                           if (Array.isArray(resourceValue) && !resourceValue.includes(limitValue)) {
-                            return next()
+                            //if this entry was previousely added and now doesnt meet filters then delete
+                            if(processed) {
+                              deleteRecord = true
+                            } else {
+                              return next();
+                            }
                           } else if (limitValue && !resourceValue) {
-                            return next()
+                            //if this entry was previousely added and now doesnt meet filters then delete
+                            if(processed) {
+                              deleteRecord = true
+                            } else {
+                              return next();
+                            }
                           } else if (resourceValue.toString() != limitValue.toString()) {
-                            return next()
+                            //if this entry was previousely added and now doesnt meet filters then delete
+                            if(processed) {
+                              deleteRecord = true
+                            } else {
+                              return next();
+                            }
                           }
                         }
                         let record = {};
@@ -753,9 +851,17 @@ class CacheFhirToES {
                                   recordFieldArr[recordFieldIndex] = "\\'"
                                 }
                               }
-                              record[field] = recordFieldArr.join('')
+                              if(deleteRecord) {
+                                record[field] = '';
+                              } else {
+                                record[field] = recordFieldArr.join('');
+                              }
                             }
-                            ctx += 'ctx._source.' + field + "='" + record[field] + "';";
+                            if(deleteRecord) {
+                              ctx += 'ctx._source.' + field + "='';";
+                            } else {
+                              ctx += 'ctx._source.' + field + "='" + record[field] + "';";
+                            }
                           }
 
                           let body = {
@@ -768,9 +874,22 @@ class CacheFhirToES {
                             },
                           };
                           let multiple = orderedResource.multiple
-                          this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, () => {
-                            return next()
-                          })
+                          if(!deleteRecord) {
+                            this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, () => {
+                              return next();
+                            })
+                          } else {
+                            //if this is the primary resource then delete the whole document, otherwise delete respective fields data
+                            if(!orderedResource.hasOwnProperty('linkElement')) {
+                              this.deleteESDocument({query: body.query}, reportDetails.name, (err) => {
+                                return next();
+                              });
+                            } else {
+                              this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, () => {
+                                return next();
+                              })
+                            }
+                          }
                         })();
                       }, () => {
                         console.log('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
