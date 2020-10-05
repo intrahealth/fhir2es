@@ -2,6 +2,7 @@
 const axios = require('axios');
 const async = require('async');
 const moment = require('moment')
+const logger = require('./winston')
 const fs = require('fs');
 const URI = require('urijs');
 const _ = require('lodash');
@@ -19,7 +20,6 @@ class CacheFhirToES {
     FHIRPassword,
     relationshipsIDs
   }) {
-    this.LastSyncTime = fs.readFileSync('./lastSync.time', 'utf8').trim();
     this.ESBaseURL = ESBaseURL
     this.ESUsername = ESUsername
     this.ESPassword = ESPassword
@@ -72,16 +72,16 @@ class CacheFhirToES {
           password: this.FHIRPassword
         },
       }).then(response => {
-        console.log('sending back response');
+        logger.info('sending back response');
         return resolve(response.data)
       }).catch((err) => {
-        console.log('Error occured while getting resource reference');
-        console.log(err);
+        logger.error('Error occured while getting resource reference');
+        logger.error(err);
         return resolve()
       })
     }).catch((err) => {
-      console.log('Error occured while getting resource reference');
-      console.log(err);
+      logger.error('Error occured while getting resource reference');
+      logger.error(err);
     })
   }
 
@@ -118,8 +118,8 @@ class CacheFhirToES {
         resolve(elementValue)
       })
     }).catch((err) => {
-      console.log('Error occured while geting Element value from extension');
-      console.log(err);
+      logger.error('Error occured while geting Element value from extension');
+      logger.error(err);
     })
   }
 
@@ -177,13 +177,13 @@ class CacheFhirToES {
         return callback(false, relationships.data);
       })
       .catch(err => {
-        console.error(err);
+        logger.error(err);
         return callback(err, false);
       });
   };
 
   updateESCompilationsRate(callback) {
-    console.log('Setting maximum compilation rate');
+    logger.info('Setting maximum compilation rate');
     let url = URI(this.ESBaseURL).segment('_cluster').segment('settings').toString();
     let body = {
       "transient": {
@@ -201,21 +201,139 @@ class CacheFhirToES {
       })
       .then(response => {
         if (response.status > 199 && response.status < 299) {
-          console.log('maximum compilation rate updated successfully');
+          logger.info('maximum compilation rate updated successfully');
           return callback(false)
         } else {
-          console.error('An error has occured while setting max compilation rate')
+          logger.error('An error has occured while setting max compilation rate')
           return callback(true)
         }
       }).catch((err) => {
-        console.error('An error has occured while setting max compilation rate')
+        logger.error('An error has occured while setting max compilation rate')
         callback(err)
         throw err
       })
   }
 
+  updateLastIndexingTime(time) {
+    return new Promise((resolve, reject) => {
+      logger.info('Updating lastIndexingTime')
+      axios({
+        url: URI(this.ESBaseURL).segment('syncdata').segment("_update_by_query").toString(),
+        method: 'POST',
+        data: {
+          script: {
+            lang: "painless",
+            source: `ctx._source.lastIndexingTime='${time}';`
+          },
+          query: {
+            match: {
+              _id: "518fad1f-3ab5-4488-a099-e7b6ab335bc1"
+            }
+          }
+        }
+      }).then((response) => {
+        if(response.status < 200 && response.status > 299) {
+          logger.error('An error occured while updating lastIndexingTime')
+          return reject()
+        }
+        return resolve(false)
+      }).catch((err) => {
+        logger.error(err)
+        logger.error('An error occured while updating lastIndexingTime')
+        return reject(true)
+      })
+    })
+  }
+
+  getLastIndexingTime() {
+    return new Promise((resolve, reject) => {
+      logger.info('Getting lastIndexingTime')
+      axios({
+        method: "GET",
+        url: URI(this.ESBaseURL).segment('syncdata').segment("_search").toString(),
+        auth: {
+          username: this.ESUsername,
+          password: this.ESPassword
+        }
+      }).then((response) => {
+        if(response.data.hits.hits.length === 0) {
+          logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+          this.lastIndexingTime = '1970-01-01T00:00:00'
+          return resolve()
+        }
+        logger.info('Returning lastIndexingTime of ' + response.data.hits.hits[0]._source.lastIndexingTime)
+        this.lastIndexingTime = response.data.hits.hits[0]._source.lastIndexingTime
+        return resolve()
+      }).catch((err) => {
+        if (err.response && err.response.status && err.response.status === 404) {
+          logger.info('Index not found, creating index syncData');
+          let mappings = {
+            mappings: {
+              properties: {
+                lastIndexingTime: {
+                  type: "text"
+                }
+              },
+            },
+          };
+          axios({
+              method: 'PUT',
+              url: URI(this.ESBaseURL).segment('syncdata').toString(),
+              data: mappings,
+              auth: {
+                username: this.ESUsername,
+                password: this.ESPassword,
+              }
+            })
+            .then(response => {
+              if (response.status !== 200) {
+                logger.error('Something went wrong and index was not created');
+                logger.error(response.data);
+                logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+                this.lastIndexingTime = '1970-01-01T00:00:00'
+                return reject()
+              } else {
+                logger.info('Index syncdata created successfully');
+                logger.info('Adding default lastIndexTime which is 1970-01-01T00:00:00')
+                axios({
+                  method: 'PUT',
+                  url: URI(this.ESBaseURL).segment('syncdata').segment("_doc").segment("518fad1f-3ab5-4488-a099-e7b6ab335bc1").toString(),
+                  data: {
+                    "lastIndexingTime": "1970-01-01T00:00:00"
+                  }
+                }).then((response) => {
+                  if(response.status >= 200 && response.status <= 299) {
+                    logger.info('Default lastIndexTime added')
+                  } else {
+                    logger.error('An error has occured while saving default lastIndexTime');
+                  }
+                  logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+                  this.lastIndexingTime = '1970-01-01T00:00:00'
+                  return reject()
+                }).catch(() => {
+                  logger.error('An error has occured while saving default lastIndexTime');
+                })
+              }
+            })
+            .catch(err => {
+              logger.error('Error: ' + err);
+              logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+              this.lastIndexingTime = '1970-01-01T00:00:00'
+              return reject()
+            });
+        } else {
+          logger.error('Error occured while creating ES index');
+          logger.error(err);
+          logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+          this.lastIndexingTime = '1970-01-01T00:00:00'
+          return reject()
+        }
+      })
+    })
+  }
+
   createESIndex(name, IDFields, callback) {
-    console.info('Checking if index ' + name + ' exists');
+    logger.info('Checking if index ' + name + ' exists');
     let url = URI(this.ESBaseURL)
       .segment(name.toString().toLowerCase())
       .toString();
@@ -229,7 +347,7 @@ class CacheFhirToES {
       })
       .then(response => {
         if (response.status === 200) {
-          console.info('Index ' + name + ' exist, not creating');
+          logger.info('Index ' + name + ' exist, not creating');
           return callback(false);
         } else {
           return callback(true);
@@ -237,7 +355,7 @@ class CacheFhirToES {
       })
       .catch(err => {
         if (err.response && err.response.status && err.response.status === 404) {
-          console.info('Index not found, creating index ' + name);
+          logger.info('Index not found, creating index ' + name);
           let mappings = {
             mappings: {
               properties: {},
@@ -258,21 +376,21 @@ class CacheFhirToES {
             })
             .then(response => {
               if (response.status !== 200) {
-                console.error('Something went wrong and index was not created');
-                console.error(response.data);
+                logger.error('Something went wrong and index was not created');
+                logger.error(response.data);
                 return callback(true);
               } else {
-                console.info('Index ' + name + ' created successfully');
+                logger.info('Index ' + name + ' created successfully');
                 return callback(false);
               }
             })
             .catch(err => {
-              console.error(err);
+              logger.error(err);
               return callback(true);
             });
         } else {
-          console.log('Error occured while creating ES index');
-          console.log(err);
+          logger.error('Error occured while creating ES index');
+          logger.error(err);
           return callback(true);
         }
       });
@@ -280,7 +398,7 @@ class CacheFhirToES {
 
   refreshIndex (index) {
     return new Promise((resolve, reject) => {
-      console.info('Refreshing index ' + index);
+      logger.info('Refreshing index ' + index);
       const url = URI(this.ESBaseURL)
         .segment(index)
         .segment('_refresh')
@@ -293,11 +411,11 @@ class CacheFhirToES {
           password: this.ESPassword,
         },
       }).then(response => {
-        console.log(`index ${index} refreshed`);
+        logger.info(`index ${index} refreshed`);
         return resolve()
       }).catch((err) => {
         if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-          console.log('Conflict occured, rerunning this request');
+          logger.warn('Conflict occured, rerunning this request');
           setTimeout(() => {
             this.refreshIndex(index, (err) => {
               if(err) {
@@ -307,15 +425,15 @@ class CacheFhirToES {
             })
           }, 2000)
         } else {
-          console.log('Error Occured while refreshing index');
+          logger.error('Error Occured while refreshing index');
           if (err.response && err.response.data) {
-            console.error(err.response.data);
+            logger.error(err.response.data);
           }
           if (err.error) {
-            console.error(err.error);
+            logger.error(err.error);
           }
           if (!err.response) {
-            console.log(err);
+            logger.error(err);
           }
           return reject();
         }
@@ -336,11 +454,11 @@ class CacheFhirToES {
           password: this.ESPassword,
         },
       }).then(response => {
-        console.log(JSON.stringify(response.data,0,2));
+        logger.info(JSON.stringify(response.data,0,2));
         return resolve()
       }).catch((err) => {
         if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-          console.log('Conflict occured, rerunning this request');
+          logger.warn('Conflict occured, rerunning this request');
           setTimeout(async() => {
             await deleteESDocument(query, index).then(() => {
               return resolve()
@@ -349,15 +467,15 @@ class CacheFhirToES {
             })
           }, 2000)
         } else {
-          console.log('Error Occured while deleting ES document');
+          logger.error('Error Occured while deleting ES document');
           if (err.response && err.response.data) {
-            console.error(err.response.data);
+            logger.error(err.response.data);
           }
           if (err.error) {
-            console.error(err.error);
+            logger.error(err.error);
           }
           if (!err.response) {
-            console.log(err);
+            logger.error(err);
           }
           return reject()
         }
@@ -457,14 +575,14 @@ class CacheFhirToES {
             }).then((response) => {
               return callback(null)
             }).catch((err) => {
-              console.log(err);
+              logger.error(err);
               return callback(null)
             })
           } else {
             return callback(null)
           }
         }).catch((err) => {
-          console.log(err);
+          logger.error(err);
           return callback(null)
         })
       },
@@ -523,22 +641,22 @@ class CacheFhirToES {
               return callback(null)
             }).catch(err => {
               if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-                console.log('Conflict occured, rerunning this request');
+                logger.warn('Conflict occured, rerunning this request');
                 setTimeout(() => {
                   this.updateESDocument(body, record, index, orderedResource, resourceId, multiple, tryDeleting, () => {
                     return callback(null)
                   })
                 }, 2000)
               } else {
-                console.log('Error Occured while creating ES document');
+                logger.error('Error Occured while creating ES document');
                 if (err.response && err.response.data) {
-                  console.error(err.response.data);
+                  logger.error(err.response.data);
                 }
                 if (err.error) {
-                  console.error(err.error);
+                  logger.error(err.error);
                 }
                 if (!err.response) {
-                  console.log(err);
+                  logger.error(err);
                 }
                 return callback(null)
               }
@@ -556,7 +674,7 @@ class CacheFhirToES {
             }).then(response => {
               // if nothing was updated and its from the primary (top) resource then create as new
               if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
-                console.info('No record with id ' + resourceId + ' found on elastic search, creating new');
+                logger.info('No record with id ' + resourceId + ' found on elastic search, creating new');
                 let url = URI(this.ESBaseURL)
                   .segment(index)
                   .segment('_doc')
@@ -574,8 +692,8 @@ class CacheFhirToES {
                     return callback(null)
                   })
                   .catch(err => {
-                    console.log('Error occured while saving document into ES');
-                    console.log(err);
+                    logger.error('Error occured while saving document into ES');
+                    logger.error(err);
                     return callback(null)
                   });
               } else {
@@ -583,22 +701,22 @@ class CacheFhirToES {
               }
             }).catch(err => {
               if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-                console.log('Conflict occured, rerunning this request');
+                logger.warn('Conflict occured, rerunning this request');
                 setTimeout(() => {
                   this.updateESDocument(body, record, index, orderedResource, resourceId, multiple, tryDeleting, () => {
                     return callback(null)
                   })
                 }, 2000)
               } else {
-                console.log('Error Occured while creating ES document');
+                logger.error('Error Occured while creating ES document');
                 if (err.response && err.response.data) {
-                  console.error(err.response.data);
+                  logger.error(err.response.data);
                 }
                 if (err.error) {
-                  console.error(err.error);
+                  logger.error(err.error);
                 }
                 if (!err.response) {
-                  console.log(err);
+                  logger.error(err);
                 }
                 return callback(null)
               }
@@ -614,17 +732,21 @@ class CacheFhirToES {
   }
 
   cache() {
-    return new Promise((resolve) => {
+    return new Promise(async(resolve) => {
+      await this.getLastIndexingTime()
+      let newLastIndexingTime = moment()
+        .subtract('1', 'minutes')
+        .format('Y-MM-DDTHH:mm:ss');
       this.getReportRelationship((err, relationships) => {
         if (err) {
           return;
         }
         if ((!relationships.entry || !Array.isArray(relationships.entry)) && !relationships.resourceType === 'Bundle') {
-          console.error('invalid resource returned');
+          logger.error('invalid resource returned');
           return;
         }
         async.each(relationships.entry, (relationship, nxtRelationship) => {
-          console.info('processing relationship ID ' + relationship.resource.id);
+          logger.info('processing relationship ID ' + relationship.resource.id);
           relationship = relationship.resource;
           let details = relationship.extension.find(ext => ext.url === 'http://ihris.org/fhir/StructureDefinition/iHRISReportDetails');
           let links = relationship.extension.filter(ext => ext.url === 'http://ihris.org/fhir/StructureDefinition/iHRISReportLink');
@@ -703,19 +825,19 @@ class CacheFhirToES {
           this.updateESCompilationsRate(() => {
             this.createESIndex(reportDetails.name, IDFields, err => {
               if (err) {
-                console.error('Stop creating report due to error in creating index');
+                logger.error('Stop creating report due to error in creating index');
                 return nxtRelationship();
               }
-              console.log('Done creating ES Index');
+              logger.info('Done creating ES Index');
               this.getImmediateLinks(orderedResources, links, () => {
                 async.eachSeries(orderedResources, (orderedResource, nxtResource) => {
                   let url = URI(this.FHIRBaseURL)
                     .segment(orderedResource.resource)
                     .segment('_history')
-                    .addQuery('_since', this.LastSyncTime);
+                    .addQuery('_since', this.lastIndexingTime);
                   url = url.toString();
                   let resourceData = [];
-                  console.info(`Getting data for resource ${orderedResource.name}`);
+                  logger.info(`Getting data for resource ${orderedResource.name}`);
                   async.whilst(
                     callback => {
                       return callback(null, url != false);
@@ -740,18 +862,18 @@ class CacheFhirToES {
                         }
                         return callback(null, url);
                       }).catch(err => {
-                        console.log('Error occured while getting resource data');
-                        console.log(err);
+                        logger.error('Error occured while getting resource data');
+                        logger.error(err);
                         return callback(null, false)
                       });
                     }, () => {
-                      console.log('Done fetching data for resource ' + orderedResource.resource);
-                      console.log('Writting resource data for resource ' + orderedResource.resource + ' into elastic search');
+                      logger.info('Done fetching data for resource ' + orderedResource.resource);
+                      logger.info('Writting resource data for resource ' + orderedResource.resource + ' into elastic search');
                       let processedRecords = []
                       let count = 1
                       resourceData.reverse()
                       async.eachSeries(resourceData, (data, next) => {
-                        console.log('processing ' + count + '/' + resourceData.length + ' records of resource ' + orderedResource.resource);
+                        logger.info('processing ' + count + '/' + resourceData.length + ' records of resource ' + orderedResource.resource);
                         count++
                         if (!data.resource || !data.resource.resourceType) {
                           return next()
@@ -929,7 +1051,7 @@ class CacheFhirToES {
                           }
                         })();
                       }, () => {
-                        console.log('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
+                        logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
                         return nxtResource()
                       });
                     }
@@ -940,12 +1062,12 @@ class CacheFhirToES {
               });
             });
           })
-        }, () => {
-          let runsLastSync = moment()
-            .subtract('10', 'minutes')
-            .format('Y-MM-DDTHH:mm:ss');
-          fs.writeFileSync('./lastSync.time', runsLastSync);
-          console.log('Done processing all relationships');
+        }, async() => {
+          //only update time if all relationships were synchronized
+          if(this.relationshipsIDs.length === 0) {
+            this.updateLastIndexingTime(newLastIndexingTime)
+          }
+          logger.info('Done processing all relationships');
           return resolve()
         });
       });
