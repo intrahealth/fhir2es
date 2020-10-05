@@ -7,7 +7,8 @@ let caching = new CacheFhirToES({
   FHIRBaseURL: 'http://localhost:8081/hapi4/fhir',
   FHIRUsername: '',
   FHIRPassword: '',
-  relationshipsIDs: [] //if not specified then all relationships will be processed
+  relationshipsIDs: [], //if not specified then all relationships will be processed
+  reset: true
 })
 caching.cache().then(() => {
   console.log('Done')

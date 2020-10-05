@@ -18,7 +18,8 @@ class CacheFhirToES {
     FHIRBaseURL,
     FHIRUsername,
     FHIRPassword,
-    relationshipsIDs
+    relationshipsIDs = [],
+    reset = false
   }) {
     this.ESBaseURL = ESBaseURL
     this.ESUsername = ESUsername
@@ -28,6 +29,7 @@ class CacheFhirToES {
     this.FHIRUsername = FHIRUsername
     this.FHIRPassword = FHIRPassword
     this.relationshipsIDs = relationshipsIDs
+    this.reset = reset
   }
 
   flattenComplex(extension) {
@@ -248,6 +250,11 @@ class CacheFhirToES {
   getLastIndexingTime() {
     return new Promise((resolve, reject) => {
       logger.info('Getting lastIndexingTime')
+      if(this.reset) {
+        logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+        this.lastIndexingTime = '1970-01-01T00:00:00'
+        return resolve()
+      }
       axios({
         method: "GET",
         url: URI(this.ESBaseURL).segment('syncdata').segment("_search").toString(),
@@ -1038,11 +1045,8 @@ class CacheFhirToES {
                           } else {
                             //if this is the primary resource then delete the whole document, otherwise delete respective fields data
                             if(!orderedResource.hasOwnProperty('linkElement')) {
-                              deleteESDocument({query: body.query}, reportDetails.name).then(() => {
-                                return next();
-                              }).catch(() => {
-                                return next();
-                              })
+                              await this.deleteESDocument({query: body.query}, reportDetails.name)
+                              return next();
                             } else {
                               this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, deleteRecord, () => {
                                 return next();

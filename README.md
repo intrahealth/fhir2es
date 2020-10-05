@@ -17,6 +17,7 @@ let caching = new CacheFhirToES({
   FHIRUsername: '',
   FHIRPassword: '',
   relationshipsIDs: [] //if not specified then all relationships will be processed
+  reset: false //default to false
 })
 caching.cache()
 ```
