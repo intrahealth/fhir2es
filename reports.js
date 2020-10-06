@@ -841,8 +841,9 @@ class CacheFhirToES {
                   let url = URI(this.FHIRBaseURL)
                     .segment(orderedResource.resource)
                     .segment('_history')
-                    .addQuery('_since', this.lastIndexingTime);
-                  url = url.toString();
+                    .addQuery('_since', this.lastIndexingTime)
+                    .addQuery('_count', 200)
+                    .toString();
                   let resourceData = [];
                   logger.info(`Getting data for resource ${orderedResource.name}`);
                   async.whilst(
