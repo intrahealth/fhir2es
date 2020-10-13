@@ -450,7 +450,7 @@ class CacheFhirToES {
 
   deleteESDocument(query, index) {
     return new Promise(async(resolve, reject) => {
-      await this.refreshIndex(index);
+      // await this.refreshIndex(index);
       let url = URI(this.ESBaseURL).segment(index).segment('_delete_by_query').toString();
       axios({
         method: 'post',
@@ -491,7 +491,7 @@ class CacheFhirToES {
   };
 
   async updateESDocument(body, record, index, orderedResource, resourceId, multiple, tryDeleting, callback) {
-    await this.refreshIndex(index);
+    // await this.refreshIndex(index);
     //this handles records that should be deleted instead of its fields being truncated
     let recordDeleted = false;
     async.series({
@@ -837,15 +837,15 @@ class CacheFhirToES {
               }
               logger.info('Done creating ES Index');
               this.getImmediateLinks(orderedResources, links, () => {
-                async.eachSeries(orderedResources, (orderedResource, nxtResource) => {
+                async.eachSeries(orderedResources, (orderedResource, nxtResourceType) => {
+                  let processedRecords = []
                   let url = URI(this.FHIRBaseURL)
                     .segment(orderedResource.resource)
                     .segment('_history')
                     .addQuery('_since', this.lastIndexingTime)
                     .addQuery('_count', 200)
                     .toString();
-                  let resourceData = [];
-                  logger.info(`Getting data for resource ${orderedResource.name}`);
+                  logger.info(`Processing data for resource ${orderedResource.name}`);
                   async.whilst(
                     callback => {
                       return callback(null, url != false);
@@ -866,199 +866,21 @@ class CacheFhirToES {
                           url = next.url
                         }
                         if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
-                          resourceData = resourceData.concat(response.data.entry);
+                          this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
+                            return callback(null, url);
+                          })
+                        } else {
+                          return callback(null, url);
                         }
-                        return callback(null, url);
                       }).catch(err => {
                         logger.error('Error occured while getting resource data');
                         logger.error(err);
                         return callback(null, false)
                       });
-                    }, () => {
-                      logger.info('Done fetching data for resource ' + orderedResource.resource);
-                      logger.info('Writting resource data for resource ' + orderedResource.resource + ' into elastic search');
-                      let processedRecords = []
-                      let count = 1
-                      resourceData.reverse()
-                      async.eachSeries(resourceData, (data, next) => {
-                        logger.info('processing ' + count + '/' + resourceData.length + ' records of resource ' + orderedResource.resource);
-                        count++
-                        if (!data.resource || !data.resource.resourceType) {
-                          return next()
-                        }
-                        let id = data.resource.resourceType + '/' + data.resource.id;
-                        let processed = processedRecords.find((record) => {
-                          return record === id
-                        })
-                        if (!processed) {
-                          processedRecords.push(id)
-                        }
-                        let deleteRecord = false;
-                        let queries = [];
-                        // just in case there are multiple queries
-                        if (orderedResource.query) {
-                          queries = orderedResource.query.split('&');
-                        }
-                        for (let query of queries) {
-                          let limits = query.split('=');
-                          let limitParameters = limits[0];
-                          let limitValue = limits[1];
-                          if (!limitValue) {
-                            limitValue = ''
-                          }
-                          let resourceValue = fhir.evaluate(data.resource, limitParameters);
-                          if (Array.isArray(resourceValue) && !resourceValue.includes(limitValue)) {
-                            //if this entry was previousely added and now doesnt meet filters then delete
-                            if(processed) {
-                              deleteRecord = true
-                            } else {
-                              return next();
-                            }
-                          } else if (limitValue && !resourceValue) {
-                            //if this entry was previousely added and now doesnt meet filters then delete
-                            if(processed) {
-                              deleteRecord = true
-                            } else {
-                              return next();
-                            }
-                          } else if (resourceValue.toString() != limitValue.toString()) {
-                            //if this entry was previousely added and now doesnt meet filters then delete
-                            if(processed) {
-                              deleteRecord = true
-                            } else {
-                              return next();
-                            }
-                          }
-                        }
-                        let record = {};
-                        (async () => {
-                          if(orderedResource["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
-                            for (let element of orderedResource["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
-                              let fieldLabel
-                              let fieldName
-                              let fieldAutogenerated = false
-                              for (let el of element) {
-                                let value = '';
-                                for (let key of Object.keys(el)) {
-                                  if (key !== 'url') {
-                                    value = el[key];
-                                  }
-                                }
-                                if (el.url === "label") {
-                                  let fleldChars = value.split(' ')
-                                  //if label has space then format it
-                                  if (fleldChars.length > 1) {
-                                    fieldLabel = value.toLowerCase().split(' ').map(word => word.replace(word[0], word[0].toUpperCase())).join('');
-                                  } else {
-                                    fieldLabel = value
-                                  }
-                                } else if (el.url === "name") {
-                                  fieldName = value
-                                } else if (el.url === "autoGenerated") {
-                                  fieldAutogenerated = value
-                                }
-                              }
-                              let displayData = fhir.evaluate(data.resource, fieldName);
-                              let value
-                              if ((!displayData || (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined)) && data.resource.extension) {
-                                value = await this.getElementValFromExtension(data.resource.extension, fieldName)
-                              } else if (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined) {
-                                value = undefined
-                              } else if (Array.isArray(displayData)) {
-                                value = displayData.pop();
-                              } else {
-                                value = displayData;
-                              }
-                              if (value || value === 0 || value === false) {
-                                if (typeof value == 'object') {
-                                  if (value.reference && fieldAutogenerated) {
-                                    value = value.reference
-                                  } else if (value.reference && !fieldAutogenerated) {
-                                    let referencedResource = await this.getResourceFromReference(value.reference);
-                                    if (referencedResource) {
-                                      value = referencedResource.name
-                                    }
-                                  } else {
-                                    value = JSON.stringify(value)
-                                  }
-                                }
-                                if (fieldName === 'id') {
-                                  value = data.resource.resourceType + '/' + value
-                                }
-                                record[fieldLabel] = value
-                              }
-                            }
-                          }
-                          record[orderedResource.name] = id
-                          let match = {};
-                          if (orderedResource.hasOwnProperty('linkElement')) {
-                            let linkElement = orderedResource.linkElement.replace(orderedResource.resource + '.', '');
-                            let linkTo = fhir.evaluate(data.resource, linkElement);
-                            if (linkElement === 'id') {
-                              linkTo = orderedResource.resource + '/' + linkTo
-                            }
-                            if(!Array.isArray(linkTo)) {
-                              if(!linkTo) {
-                                linkTo = []
-                              } else {
-                                linkTo = [linkTo]
-                              }
-                            }
-                            match['__' + orderedResource.name + '_link'] = linkTo;
-                          } else {
-                            match[orderedResource.name] = [data.resource.resourceType + '/' + data.resource.id];
-                          }
-
-                          let ctx = '';
-                          for (let field in record) {
-                            // cleaning to escape ' char
-                            if (record[field] && typeof record[field] === 'string') {
-                              let recordFieldArr = record[field].split('')
-                              for (let recordFieldIndex in recordFieldArr) {
-                                let char = recordFieldArr[recordFieldIndex]
-                                if (char === "'") {
-                                  recordFieldArr[recordFieldIndex] = "\\'"
-                                }
-                              }
-                              record[field] = recordFieldArr.join('');
-                            }
-                            if(deleteRecord) {
-                              ctx += 'ctx._source.' + field + "='';";
-                            } else {
-                              ctx += 'ctx._source.' + field + "='" + record[field] + "';";
-                            }
-                          }
-
-                          let body = {
-                            script: {
-                              lang: 'painless',
-                              source: ctx
-                            },
-                            query: {
-                              terms: match ,
-                            },
-                          };
-                          let multiple = orderedResource.multiple
-                          if(!deleteRecord) {
-                            this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, deleteRecord, () => {
-                              return next();
-                            })
-                          } else {
-                            //if this is the primary resource then delete the whole document, otherwise delete respective fields data
-                            if(!orderedResource.hasOwnProperty('linkElement')) {
-                              await this.deleteESDocument({query: body.query}, reportDetails.name)
-                              return next();
-                            } else {
-                              this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, deleteRecord, () => {
-                                return next();
-                              })
-                            }
-                          }
-                        })();
-                      }, () => {
-                        logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
-                        return nxtResource()
-                      });
+                    }, async() => {
+                      await this.refreshIndex(reportDetails.name);
+                      logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
+                      return nxtResourceType()
                     }
                   );
                 }, () => {
@@ -1077,6 +899,190 @@ class CacheFhirToES {
         });
       });
     })
+  }
+
+  processResource(resourceData, orderedResource, reportDetails, processedRecords, callback) {
+    let count = 1
+    async.each(resourceData, (data, nxtResource) => {
+      logger.info('processing ' + count + '/' + resourceData.length + ' records of resource ' + orderedResource.resource);
+      count++
+      if (!data.resource || !data.resource.resourceType) {
+        return nxtResource()
+      }
+      let id = data.resource.resourceType + '/' + data.resource.id;
+      let processed = processedRecords.find((record) => {
+        return record === id
+      })
+      if (!processed) {
+        processedRecords.push(id)
+      } else {
+        return nxtResource()
+      }
+      let deleteRecord = false;
+      let queries = [];
+      // just in case there are multiple queries
+      if (orderedResource.query) {
+        queries = orderedResource.query.split('&');
+      }
+      for (let query of queries) {
+        let limits = query.split('=');
+        let limitParameters = limits[0];
+        let limitValue = limits[1];
+        if (!limitValue) {
+          limitValue = ''
+        }
+        let resourceValue = fhir.evaluate(data.resource, limitParameters);
+        if (Array.isArray(resourceValue) && !resourceValue.includes(limitValue)) {
+          //if this entry was previousely added and now doesnt meet filters then delete
+          if(processed) {
+            deleteRecord = true
+          } else {
+            return nxtResource();
+          }
+        } else if (limitValue && !resourceValue) {
+          //if this entry was previousely added and now doesnt meet filters then delete
+          if(processed) {
+            deleteRecord = true
+          } else {
+            return nxtResource();
+          }
+        } else if (resourceValue.toString() != limitValue.toString()) {
+          //if this entry was previousely added and now doesnt meet filters then delete
+          if(processed) {
+            deleteRecord = true
+          } else {
+            return nxtResource();
+          }
+        }
+      }
+      let record = {};
+      (async () => {
+        if(orderedResource["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+          for (let element of orderedResource["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+            let fieldLabel
+            let fieldName
+            let fieldAutogenerated = false
+            for (let el of element) {
+              let value = '';
+              for (let key of Object.keys(el)) {
+                if (key !== 'url') {
+                  value = el[key];
+                }
+              }
+              if (el.url === "label") {
+                let fleldChars = value.split(' ')
+                //if label has space then format it
+                if (fleldChars.length > 1) {
+                  fieldLabel = value.toLowerCase().split(' ').map(word => word.replace(word[0], word[0].toUpperCase())).join('');
+                } else {
+                  fieldLabel = value
+                }
+              } else if (el.url === "name") {
+                fieldName = value
+              } else if (el.url === "autoGenerated") {
+                fieldAutogenerated = value
+              }
+            }
+            let displayData = fhir.evaluate(data.resource, fieldName);
+            let value
+            if ((!displayData || (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined)) && data.resource.extension) {
+              value = await this.getElementValFromExtension(data.resource.extension, fieldName)
+            } else if (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined) {
+              value = undefined
+            } else if (Array.isArray(displayData)) {
+              value = displayData.pop();
+            } else {
+              value = displayData;
+            }
+            if (value || value === 0 || value === false) {
+              if (typeof value == 'object') {
+                if (value.reference && fieldAutogenerated) {
+                  value = value.reference
+                } else if (value.reference && !fieldAutogenerated) {
+                  let referencedResource = await this.getResourceFromReference(value.reference);
+                  if (referencedResource) {
+                    value = referencedResource.name
+                  }
+                } else {
+                  value = JSON.stringify(value)
+                }
+              }
+              if (fieldName === 'id') {
+                value = data.resource.resourceType + '/' + value
+              }
+              record[fieldLabel] = value
+            }
+          }
+        }
+        record[orderedResource.name] = id
+        let match = {};
+        if (orderedResource.hasOwnProperty('linkElement')) {
+          let linkElement = orderedResource.linkElement.replace(orderedResource.resource + '.', '');
+          let linkTo = fhir.evaluate(data.resource, linkElement);
+          if (linkElement === 'id') {
+            linkTo = orderedResource.resource + '/' + linkTo
+          }
+          if(!Array.isArray(linkTo)) {
+            if(!linkTo) {
+              linkTo = []
+            } else {
+              linkTo = [linkTo]
+            }
+          }
+          match['__' + orderedResource.name + '_link'] = linkTo;
+        } else {
+          match[orderedResource.name] = [data.resource.resourceType + '/' + data.resource.id];
+        }
+
+        let ctx = '';
+        for (let field in record) {
+          // cleaning to escape ' char
+          if (record[field] && typeof record[field] === 'string') {
+            let recordFieldArr = record[field].split('')
+            for (let recordFieldIndex in recordFieldArr) {
+              let char = recordFieldArr[recordFieldIndex]
+              if (char === "'") {
+                recordFieldArr[recordFieldIndex] = "\\'"
+              }
+            }
+            record[field] = recordFieldArr.join('');
+          }
+          if(deleteRecord) {
+            ctx += 'ctx._source.' + field + "='';";
+          } else {
+            ctx += 'ctx._source.' + field + "='" + record[field] + "';";
+          }
+        }
+
+        let body = {
+          script: {
+            lang: 'painless',
+            source: ctx
+          },
+          query: {
+            terms: match ,
+          },
+        };
+        let multiple = orderedResource.multiple
+        if(!deleteRecord) {
+          this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, deleteRecord, () => {
+            return nxtResource();
+          })
+        } else {
+          //if this is the primary resource then delete the whole document, otherwise delete respective fields data
+          if(!orderedResource.hasOwnProperty('linkElement')) {
+            await this.deleteESDocument({query: body.query}, reportDetails.name)
+            return nxtResource();
+          } else {
+            this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource.id, multiple, deleteRecord, () => {
+              return nxtResource();
+            })
+          }
+        }
+      })();
+    }, () => {
+      return callback()
+    });
   }
 }
 module.exports = {
