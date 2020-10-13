@@ -839,6 +839,7 @@ class CacheFhirToES {
               this.getImmediateLinks(orderedResources, links, () => {
                 async.eachSeries(orderedResources, (orderedResource, nxtResourceType) => {
                   let processedRecords = []
+                  this.count = 1;
                   let url = URI(this.FHIRBaseURL)
                     .segment(orderedResource.resource)
                     .segment('_history')
@@ -858,6 +859,7 @@ class CacheFhirToES {
                           password: this.FHIRPassword,
                         },
                       }).then(response => {
+                        this.totalResources = response.data.total;
                         url = false;
                         const next = response.data.link.find(
                           link => link.relation === 'next'
@@ -902,10 +904,9 @@ class CacheFhirToES {
   }
 
   processResource(resourceData, orderedResource, reportDetails, processedRecords, callback) {
-    let count = 1
     async.each(resourceData, (data, nxtResource) => {
-      logger.info('processing ' + count + '/' + resourceData.length + ' records of resource ' + orderedResource.resource);
-      count++
+      logger.info('processing ' + this.count + '/' + this.totalResources + ' records of resource ' + orderedResource.resource);
+      this.count++
       if (!data.resource || !data.resource.resourceType) {
         return nxtResource()
       }
