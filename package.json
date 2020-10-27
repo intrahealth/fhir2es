@@ -1,6 +1,6 @@
 {
   "name": "fhir2es",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "description": "Reads and caches fhir data to elasticsearch",
   "main": "reports.js",
   "scripts": {
@@ -11,19 +11,23 @@
     "url": "git+https://github.com/intrahealth/fhir2es.git"
   },
   "keywords": [
+    "fhir to elasticsearch",
+    "fhir2es",
     "fhir",
-    "elasticsearch"
+    "elasticsearch",
+    "elasticsearch caching"
   ],
-  "author": "Ally Shaban and Luke Duncan",
+  "author": "Ally Shaban",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/iHRIS/fhir2es/issues"
+    "url": "https://github.com/intrahealth/fhir2es/issues"
   },
   "homepage": "https://github.com/intrahealth/fhir2es",
   "dependencies": {
     "async": "^3.2.0",
     "axios": "^0.19.2",
     "fhir": "^4.7.3",
+    "fhirpath": "^2.6.2",
     "lodash": "^4.17.15",
     "moment": "^2.27.0",
     "urijs": "^1.19.2",
