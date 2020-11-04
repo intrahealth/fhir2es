@@ -3,11 +3,9 @@ const axios = require('axios');
 const async = require('async');
 const moment = require('moment')
 const logger = require('./winston')
-const fs = require('fs');
 const URI = require('urijs');
 const _ = require('lodash');
 const fhirpath = require('fhirpath');
-const { split } = require('lodash');
 class CacheFhirToES {
   constructor({
     ESBaseURL,
@@ -1060,6 +1058,7 @@ class CacheFhirToES {
                 async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
                   let processedRecords = []
                   this.count = 1;
+                  let offset = 0
                   let url = URI(this.FHIRBaseURL)
                     .segment(orderedResource.resource)
                     .segment('_history')
@@ -1088,6 +1087,17 @@ class CacheFhirToES {
                           url = next.url
                         }
                         if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
+                          //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
+                          offset += 200
+                          if(offset <= this.totalResources && !url) {
+                            url = URI(this.FHIRBaseURL)
+                            .segment(orderedResource.resource)
+                            .segment('_history')
+                            .addQuery('_since', this.lastIndexingTime)
+                            .addQuery('_count', 200)
+                            .addQuery('_getpagesoffset', offset)
+                            .toString();
+                          }
                           this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
                             return callback(null, url);
                           })
@@ -1219,7 +1229,12 @@ class CacheFhirToES {
             } else if (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined) {
               value = undefined
             } else if (Array.isArray(displayData)) {
-              value = displayData.pop();
+              if(fieldLabel.startsWith('__') && orderedResource.multiple) {
+                // value = displayData
+                value = displayData.pop();
+              } else {
+                value = displayData.pop();
+              }
             } else {
               value = displayData;
             }
@@ -1274,7 +1289,6 @@ class CacheFhirToES {
         } else {
           match[orderedResource.name] = [data.resource.resourceType + '/' + data.resource.id];
         }
-
         let ctx = '';
         for (let field in record) {
           // cleaning to escape ' char
@@ -1289,7 +1303,14 @@ class CacheFhirToES {
             record[field] = recordFieldArr.join('');
           }
           if(deleteRecord || !record[field]) {
-            ctx += 'ctx._source.' + field + "='null';";
+            ctx += 'ctx._source.' + field + "=null;";
+            if(field.startsWith('__')) {
+              let truncateResources = this.getChildrenResources(orderedResource.name)
+              let truncateFields = this.getResourcesFields(truncateResources)
+              for(let truncField of truncateFields) {
+                ctx += 'ctx._source.' + truncField.field + "=null;";
+              }
+            }
           } else {
             ctx += 'ctx._source.' + field + "='" + record[field] + "';";
           }
@@ -1338,7 +1359,9 @@ class CacheFhirToES {
   }
 
   fixDataInconsistency(reportDetails, orderedResource, callback) {
+    logger.info("Fixing data inconsistency for resource " + orderedResource.resource)
     //these must be run in series
+    let fieldStillMissing = false
     async.series({
       //this fix missing data i.e __location_link is available but location is missing
       fixMissing: (callback) => {
@@ -1353,13 +1376,16 @@ class CacheFhirToES {
             }
           }
         }
-        runCleaner(query, false, this, () => {
+        runCleaner(query, false, this, (missing) => {
+          if(missing) {
+            fieldStillMissing = true
+          }
           return callback(null)
         })
       },
       //this fix invalid data i.e __location_link not equal to location, and location is always invalid, not __location_link
       differences: (callback) => {
-        if(!orderedResource.linkElement) {
+        if(!orderedResource.linkElement || fieldStillMissing) {
           return callback(null)
         }
         let query = {
@@ -1368,7 +1394,7 @@ class CacheFhirToES {
               must: {
                 script: {
                   script: {
-                    source: `doc['__${orderedResource.name}_link'].value != doc['${orderedResource.name}'].value`,
+                    source: `if(doc['__${orderedResource.name}_link'].size() != 0 && doc['${orderedResource.name}'].size() != 0) {if(doc['__${orderedResource.name}_link'].value != doc['${orderedResource.name}'].value){return true}}`,
                     lang: "painless"
                   }
                 }
@@ -1397,7 +1423,6 @@ class CacheFhirToES {
           // end of reversed linked resources
           let resIds = ''
           for(let doc of documents) {
-            logger.error(doc._source['__' + orderedResource.name + '_link']);
             if(doc._source['__' + orderedResource.name + '_link']) {
               if(!resIds) {
                 let linkResType = doc._source['__' + orderedResource.name + '_link'].split('/')[0]
@@ -1419,7 +1444,7 @@ class CacheFhirToES {
               continue;
             }
           }
-          if(!resIds || (ignoreReverseLinked && reverseLink)) {
+          if(!resIds || resIds == 'null' || (ignoreReverseLinked && reverseLink)) {
             return callback()
           }
           let processedRecords = []
@@ -1432,7 +1457,6 @@ class CacheFhirToES {
           } else {
             url = url.addQuery(orderedResource.linkElementSearchParameter, resIds)
           }
-          logger.error(resIds + ' ' + url.toString());
           url = url.toString()
           async.whilst(
             (callback) => {
