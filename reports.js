@@ -6,12 +6,14 @@ const logger = require('./winston')
 const URI = require('urijs');
 const _ = require('lodash');
 const fhirpath = require('fhirpath');
+const winston = require('winston/lib/winston/config');
 class CacheFhirToES {
   constructor({
     ESBaseURL,
     ESUsername,
     ESPassword,
     ESMaxCompilationRate,
+    ESMaxScrollContext,
     FHIRBaseURL,
     FHIRUsername,
     FHIRPassword,
@@ -26,6 +28,7 @@ class CacheFhirToES {
     this.FHIRUsername = FHIRUsername
     this.FHIRPassword = FHIRPassword
     this.relationshipsIDs = relationshipsIDs
+    this.ESMaxScrollContext = ESMaxScrollContext
     this.reset = reset
   }
 
@@ -185,6 +188,43 @@ class CacheFhirToES {
         return callback(err, false);
       });
   };
+
+  updateESScrollContext() {
+    return new Promise((resolve, reject) => {
+      logger.info('Setting maximum open scroll context');
+      let url = URI(this.ESBaseURL).segment('_cluster').segment('settings').toString();
+      let body = {
+        "persistent": {
+          "search.max_open_scroll_context": this.ESMaxScrollContext
+        },
+        "transient": {
+          "search.max_open_scroll_context": this.ESMaxScrollContext
+        }
+      };
+      axios({
+          method: 'PUT',
+          url,
+          auth: {
+            username: this.ESUsername,
+            password: this.ESPassword,
+          },
+          data: body
+        })
+        .then(response => {
+          if (response.status > 199 && response.status < 299) {
+            logger.info('maximum open scroll context updated successfully');
+            return resolve()
+          } else {
+            logger.error('An error has occured while setting max open scroll context')
+            return reject()
+          }
+        }).catch((err) => {
+          logger.error('An error has occured while setting max open scroll context')
+          reject()
+          throw err
+        })
+    })
+  }
 
   updateESCompilationsRate(callback) {
     logger.info('Setting maximum compilation rate');
@@ -772,6 +812,16 @@ class CacheFhirToES {
                 password: this.ESPassword,
               },
             }).then(response => {
+              logger.error(JSON.stringify({
+                method: 'post',
+                url,
+                data: updBodyData,
+                auth: {
+                  username: this.ESUsername,
+                  password: this.ESPassword,
+                },
+              },0,2));
+              logger.error(JSON.stringify(response.data,0,2));
               return callback(null)
             }).catch(err => {
               if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
@@ -807,6 +857,16 @@ class CacheFhirToES {
                 password: this.ESPassword,
               },
             }).then(response => {
+              logger.error(JSON.stringify({
+                method: 'post',
+                url,
+                data: bodyData,
+                auth: {
+                  username: this.ESUsername,
+                  password: this.ESPassword,
+                },
+              },0,2));
+              logger.error(JSON.stringify(response.data,0,2));
               // if nothing was updated and its from the primary (top) resource then create as new
               if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
                 logger.info('No record with id ' + resourceData.id + ' found on elastic search, creating new');
@@ -1047,85 +1107,89 @@ class CacheFhirToES {
           // reportDetails.resource = subject._type;
           this.orderedResources.push(reportDetails);
           IDFields.push(reportDetails.name);
-          this.updateESCompilationsRate(() => {
-            this.createESIndex(reportDetails.name, IDFields, err => {
-              if (err) {
-                logger.error('Stop creating report due to error in creating index');
-                return nxtRelationship();
-              }
-              logger.info('Done creating ES Index');
-              this.getImmediateLinks(links, () => {
-                async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
-                  let processedRecords = []
-                  this.count = 1;
-                  let offset = 0
-                  let url = URI(this.FHIRBaseURL)
-                    .segment(orderedResource.resource)
-                    .segment('_history')
-                    .addQuery('_since', this.lastIndexingTime)
-                    .addQuery('_count', 200)
-                    .toString();
-                  logger.info(`Processing data for resource ${orderedResource.name}`);
-                  async.whilst(
-                    callback => {
-                      return callback(null, url != false);
-                    },
-                    callback => {
-                      axios.get(url, {
-                        withCredentials: true,
-                        auth: {
-                          username: this.FHIRUsername,
-                          password: this.FHIRPassword,
-                        },
-                      }).then(response => {
-                        this.totalResources = response.data.total;
-                        url = false;
-                        const next = response.data.link.find(
-                          link => link.relation === 'next'
-                        );
-                        if (next) {
-                          url = next.url
-                        }
-                        if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
-                          //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
-                          offset += 200
-                          if(offset <= this.totalResources && !url) {
-                            url = URI(this.FHIRBaseURL)
-                            .segment(orderedResource.resource)
-                            .segment('_history')
-                            .addQuery('_since', this.lastIndexingTime)
-                            .addQuery('_count', 200)
-                            .addQuery('_getpagesoffset', offset)
-                            .toString();
-                          }
-                          this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
-                            return callback(null, url);
-                          })
-                        } else {
-                          return callback(null, url);
-                        }
-                      }).catch(err => {
-                        logger.error('Error occured while getting resource data');
-                        logger.error(err);
-                        return callback(null, false)
-                      });
-                    }, async() => {
-                      try {
-                        await this.refreshIndex(reportDetails.name);
-                      } catch (error) {
-                        logger.error(error);
-                      }
-                      logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
-                      this.fixDataInconsistency(reportDetails, orderedResource, () => {
-                        return nxtResourceType()
-                      })
-                    }
-                  );
-                }, () => {
+          this.updateESScrollContext().then(() => {
+            this.updateESCompilationsRate(() => {
+              this.createESIndex(reportDetails.name, IDFields, err => {
+                if (err) {
+                  logger.error('Stop creating report due to error in creating index');
                   return nxtRelationship();
+                }
+                logger.info('Done creating ES Index');
+                this.getImmediateLinks(links, () => {
+                  async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
+                    let processedRecords = []
+                    this.count = 1;
+                    let offset = 0
+                    let url = URI(this.FHIRBaseURL)
+                      .segment(orderedResource.resource)
+                      .segment('_history')
+                      .addQuery('_since', this.lastIndexingTime)
+                      .addQuery('_count', 200)
+                      .toString();
+                    logger.info(`Processing data for resource ${orderedResource.name}`);
+                    async.whilst(
+                      callback => {
+                        return callback(null, url != false);
+                      },
+                      callback => {
+                        axios.get(url, {
+                          withCredentials: true,
+                          auth: {
+                            username: this.FHIRUsername,
+                            password: this.FHIRPassword,
+                          },
+                        }).then(response => {
+                          this.totalResources = response.data.total;
+                          url = false;
+                          const next = response.data.link.find(
+                            link => link.relation === 'next'
+                          );
+                          if (next) {
+                            url = next.url
+                          }
+                          if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
+                            //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
+                            offset += 200
+                            if(offset <= this.totalResources && !url) {
+                              url = URI(this.FHIRBaseURL)
+                              .segment(orderedResource.resource)
+                              .segment('_history')
+                              .addQuery('_since', this.lastIndexingTime)
+                              .addQuery('_count', 200)
+                              .addQuery('_getpagesoffset', offset)
+                              .toString();
+                            }
+                            this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
+                              return callback(null, url);
+                            })
+                          } else {
+                            return callback(null, url);
+                          }
+                        }).catch(err => {
+                          logger.error('Error occured while getting resource data');
+                          logger.error(err);
+                          return callback(null, false)
+                        });
+                      }, async() => {
+                        try {
+                          await this.refreshIndex(reportDetails.name);
+                        } catch (error) {
+                          logger.error(error);
+                        }
+                        logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
+                        this.fixDataInconsistency(reportDetails, orderedResource, () => {
+                          return nxtResourceType()
+                        })
+                      }
+                    );
+                  }, () => {
+                    return nxtRelationship();
+                  });
                 });
               });
-            });
+            })
+          }).catch((err) => {
+            logger.error(err);
           })
         }, async() => {
           //only update time if all relationships were synchronized
