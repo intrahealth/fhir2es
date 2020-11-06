@@ -429,7 +429,12 @@ class CacheFhirToES {
           };
           for (let IDField of IDFields) {
             mappings.mappings.properties[IDField] = {};
-            mappings.mappings.properties[IDField].type = 'keyword';
+            mappings.mappings.properties[IDField].type = 'text';
+            mappings.mappings.properties[IDField].fields = {
+              keyword: {
+                type: 'keyword'
+              }
+            }
           }
           axios({
               method: 'put',
@@ -1329,9 +1334,9 @@ class CacheFhirToES {
               linkTo = [linkTo]
             }
           }
-          match['__' + orderedResource.name + '_link'] = linkTo;
+          match['__' + orderedResource.name + '_link' + '.keyword'] = linkTo;
         } else {
-          match[orderedResource.name] = [data.resource.resourceType + '/' + data.resource.id];
+          match[orderedResource.name + '.keyword'] = [data.resource.resourceType + '/' + data.resource.id];
         }
         let ctx = '';
         for (let field in record) {
@@ -1438,7 +1443,7 @@ class CacheFhirToES {
               must: {
                 script: {
                   script: {
-                    source: `if(doc['__${orderedResource.name}_link'].size() != 0 && doc['${orderedResource.name}'].size() != 0) {if(doc['__${orderedResource.name}_link'].value != doc['${orderedResource.name}'].value){return true}}`,
+                    source: `if(doc['__${orderedResource.name}_link.keyword'].size() != 0 && doc['${orderedResource.name}.keyword'].size() != 0) {if(doc['__${orderedResource.name}_link.keyword'].value != doc['${orderedResource.name}.keyword'].value){return true}}`,
                     lang: "painless"
                   }
                 }

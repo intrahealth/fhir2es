@@ -5,10 +5,9 @@ let caching = new CacheFhirToES({
   ESPassword: '',
   ESMaxCompilationRate: '60000/1m',
   ESMaxScrollContext: '60000',
-  FHIRBaseURL: 'http://localhost:8081/hfr/fhir',
+  FHIRBaseURL: 'http://localhost:8081/hapi/fhir',
   FHIRUsername: '',
   FHIRPassword: '',
-  // relationshipsIDs: ["ihris-es-report-mhero-send-message"], //if not specified then all relationships will be processed
   relationshipsIDs: [], //if not specified then all relationships will be processed
   reset: false
 })
