@@ -9,8 +9,8 @@ let caching = new CacheFhirToES({
   FHIRUsername: '',
   FHIRPassword: '',
   // relationshipsIDs: ["ihris-es-report-mhero-send-message"], //if not specified then all relationships will be processed
-  relationshipsIDs: ["hfr"], //if not specified then all relationships will be processed
-  reset: true
+  relationshipsIDs: [], //if not specified then all relationships will be processed
+  reset: false
 })
 caching.cache().then(() => {
   console.log('Done')

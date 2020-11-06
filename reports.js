@@ -812,16 +812,6 @@ class CacheFhirToES {
                 password: this.ESPassword,
               },
             }).then(response => {
-              logger.error(JSON.stringify({
-                method: 'post',
-                url,
-                data: updBodyData,
-                auth: {
-                  username: this.ESUsername,
-                  password: this.ESPassword,
-                },
-              },0,2));
-              logger.error(JSON.stringify(response.data,0,2));
               return callback(null)
             }).catch(err => {
               if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
@@ -857,16 +847,6 @@ class CacheFhirToES {
                 password: this.ESPassword,
               },
             }).then(response => {
-              logger.error(JSON.stringify({
-                method: 'post',
-                url,
-                data: bodyData,
-                auth: {
-                  username: this.ESUsername,
-                  password: this.ESPassword,
-                },
-              },0,2));
-              logger.error(JSON.stringify(response.data,0,2));
               // if nothing was updated and its from the primary (top) resource then create as new
               if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
                 logger.info('No record with id ' + resourceData.id + ' found on elastic search, creating new');
@@ -1503,8 +1483,8 @@ class CacheFhirToES {
                 resIds += ',' + doc._source['__' + orderedResource.name + '_link']
               }
             } else {
-              logger.error(JSON.stringify(doc,0,2));
-              logger.error('There is a serious data inconsistency that needs to be addressed on index ' + reportDetails.name + ' and index id ' + doc._id + ', field ' + '__' + orderedResource.name + '_link' + ' is missing');
+              //logger.error(JSON.stringify(doc,0,2));
+              //logger.error('There is a serious data inconsistency that needs to be addressed on index ' + reportDetails.name + ' and index id ' + doc._id + ', field ' + '__' + orderedResource.name + '_link' + ' is missing');
               continue;
             }
           }
