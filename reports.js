@@ -6,7 +6,6 @@ const logger = require('./winston')
 const URI = require('urijs');
 const _ = require('lodash');
 const fhirpath = require('fhirpath');
-const winston = require('winston/lib/winston/config');
 class CacheFhirToES {
   constructor({
     ESBaseURL,
@@ -260,7 +259,7 @@ class CacheFhirToES {
       })
   }
 
-  updateLastIndexingTime(time) {
+  updateLastIndexingTime(time, index) {
     return new Promise((resolve, reject) => {
       logger.info('Updating lastIndexingTime')
       axios({
@@ -276,8 +275,8 @@ class CacheFhirToES {
             source: `ctx._source.lastIndexingTime='${time}';`
           },
           query: {
-            match: {
-              _id: "518fad1f-3ab5-4488-a099-e7b6ab335bc1"
+            term: {
+              _id: index
             }
           }
         }
@@ -295,16 +294,24 @@ class CacheFhirToES {
     })
   }
 
-  getLastIndexingTime() {
+  getLastIndexingTime(index) {
     return new Promise((resolve, reject) => {
       if(this.since && !this.reset) {
         this.lastIndexingTime = this.since
         return resolve()
       }
       logger.info('Getting lastIndexingTime')
+      let query = {
+        query: {
+          term: {
+            _id: index
+          }
+        }
+      }
       axios({
         method: "GET",
         url: URI(this.ESBaseURL).segment('syncdata').segment("_search").toString(),
+        data: query,
         auth: {
           username: this.ESUsername,
           password: this.ESPassword
@@ -360,7 +367,7 @@ class CacheFhirToES {
                     username: this.ESUsername,
                     password: this.ESPassword,
                   },
-                  url: URI(this.ESBaseURL).segment('syncdata').segment("_doc").segment("518fad1f-3ab5-4488-a099-e7b6ab335bc1").toString(),
+                  url: URI(this.ESBaseURL).segment('syncdata').segment("_doc").segment(index).toString(),
                   data: {
                     "lastIndexingTime": "1970-01-01T00:00:00"
                   }
@@ -1005,14 +1012,6 @@ class CacheFhirToES {
 
   cache() {
     return new Promise(async(resolve) => {
-      try {
-        await this.getLastIndexingTime()
-      } catch (error) {
-        logger.error(error);
-      }
-      let newLastIndexingTime = moment()
-        .subtract('1', 'minutes')
-        .format('Y-MM-DDTHH:mm:ss');
       this.getReportRelationship((err, relationships) => {
         if (err) {
           return;
@@ -1108,71 +1107,83 @@ class CacheFhirToES {
                 logger.info('Done creating ES Index');
                 this.getImmediateLinks(links, () => {
                   async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
-                    let processedRecords = []
-                    this.count = 1;
-                    let offset = 0
-                    let url = URI(this.FHIRBaseURL)
-                      .segment(orderedResource.resource)
-                      .segment('_history')
-                      .addQuery('_since', this.lastIndexingTime)
-                      .addQuery('_count', 200)
-                      .toString();
-                    logger.info(`Processing data for resource ${orderedResource.name}`);
-                    async.whilst(
-                      callback => {
-                        return callback(null, url != false);
-                      },
-                      callback => {
-                        axios.get(url, {
-                          withCredentials: true,
-                          auth: {
-                            username: this.FHIRUsername,
-                            password: this.FHIRPassword,
-                          },
-                        }).then(response => {
-                          this.totalResources = response.data.total;
-                          url = false;
-                          const next = response.data.link.find(
-                            link => link.relation === 'next'
-                          );
-                          if (next) {
-                            url = next.url
-                          }
-                          if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
-                            //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
-                            offset += 200
-                            if(offset <= this.totalResources && !url) {
-                              url = URI(this.FHIRBaseURL)
-                              .segment(orderedResource.resource)
-                              .segment('_history')
-                              .addQuery('_since', this.lastIndexingTime)
-                              .addQuery('_count', 200)
-                              .addQuery('_getpagesoffset', offset)
-                              .toString();
+                    this.getLastIndexingTime(orderedResource.name).then(() => {
+                      let newLastIndexingTime = moment()
+                        .subtract('1', 'minutes')
+                        .format('Y-MM-DDTHH:mm:ss');
+                      let processedRecords = []
+                      this.count = 1;
+                      let offset = 0
+                      let url = URI(this.FHIRBaseURL)
+                        .segment(orderedResource.resource)
+                        .segment('_history')
+                        .addQuery('_since', this.lastIndexingTime)
+                        .addQuery('_count', 200)
+                        .toString();
+                      logger.info(`Processing data for resource ${orderedResource.name}`);
+                      async.whilst(
+                        callback => {
+                          return callback(null, url != false);
+                        },
+                        callback => {
+                          axios.get(url, {
+                            withCredentials: true,
+                            auth: {
+                              username: this.FHIRUsername,
+                              password: this.FHIRPassword,
+                            },
+                          }).then(response => {
+                            this.totalResources = response.data.total;
+                            url = false;
+                            const next = response.data.link.find(
+                              link => link.relation === 'next'
+                            );
+                            if (next) {
+                              url = next.url
                             }
-                            this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
+                            if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
+                              //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
+                              offset += 200
+                              if(offset <= this.totalResources && !url) {
+                                url = URI(this.FHIRBaseURL)
+                                .segment(orderedResource.resource)
+                                .segment('_history')
+                                .addQuery('_since', this.lastIndexingTime)
+                                .addQuery('_count', 200)
+                                .addQuery('_getpagesoffset', offset)
+                                .toString();
+                              }
+                              this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
+                                return callback(null, url);
+                              })
+                            } else {
                               return callback(null, url);
-                            })
-                          } else {
-                            return callback(null, url);
+                            }
+                          }).catch(err => {
+                            logger.error('Error occured while getting resource data');
+                            logger.error(err);
+                            return callback(null, false)
+                          });
+                        }, async() => {
+                          try {
+                            await this.refreshIndex(reportDetails.name);
+                          } catch (error) {
+                            logger.error(error);
                           }
-                        }).catch(err => {
-                          logger.error('Error occured while getting resource data');
-                          logger.error(err);
-                          return callback(null, false)
-                        });
-                      }, async() => {
-                        try {
-                          await this.refreshIndex(reportDetails.name);
-                        } catch (error) {
-                          logger.error(error);
+                          logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
+                          this.fixDataInconsistency(reportDetails, orderedResource, () => {
+                            try {
+                              this.updateLastIndexingTime(newLastIndexingTime, orderedResource.name)
+                            } catch (error) {
+                              logger.error(error);
+                            }
+                            return nxtResourceType()
+                          })
                         }
-                        logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
-                        this.fixDataInconsistency(reportDetails, orderedResource, () => {
-                          return nxtResourceType()
-                        })
-                      }
-                    );
+                      );
+                    }).catch((err) => {
+                      logger.error(err);
+                    })
                   }, () => {
                     return nxtRelationship();
                   });
@@ -1183,14 +1194,6 @@ class CacheFhirToES {
             logger.error(err);
           })
         }, async() => {
-          //only update time if all relationships were synchronized
-          if(this.relationshipsIDs.length === 0) {
-            try {
-              this.updateLastIndexingTime(newLastIndexingTime)
-            } catch (error) {
-              logger.error(error);
-            }
-          }
           logger.info('Done processing all relationships');
           return resolve()
         });
