@@ -18,6 +18,7 @@ class CacheFhirToES {
     FHIRUsername,
     FHIRPassword,
     relationshipsIDs = [],
+    since,
     reset = false
   }) {
     this.ESBaseURL = ESBaseURL
@@ -29,6 +30,7 @@ class CacheFhirToES {
     this.FHIRPassword = FHIRPassword
     this.relationshipsIDs = relationshipsIDs
     this.ESMaxScrollContext = ESMaxScrollContext
+    this.since = since
     this.reset = reset
   }
 
@@ -262,7 +264,7 @@ class CacheFhirToES {
     return new Promise((resolve, reject) => {
       logger.info('Updating lastIndexingTime')
       axios({
-        url: URI(this.ESBaseURL).segment('syncdata').segment("_update_by_query").toString(),
+        url: URI(this.ESBaseURL).segment('syncdata').segment("_update_by_query").addQuery('conflicts', 'proceed').toString(),
         method: 'POST',
         auth: {
           username: this.ESUsername,
@@ -295,6 +297,10 @@ class CacheFhirToES {
 
   getLastIndexingTime() {
     return new Promise((resolve, reject) => {
+      if(this.since && !this.reset) {
+        this.lastIndexingTime = this.since
+        return resolve()
+      }
       logger.info('Getting lastIndexingTime')
       axios({
         method: "GET",
@@ -1179,7 +1185,11 @@ class CacheFhirToES {
         }, async() => {
           //only update time if all relationships were synchronized
           if(this.relationshipsIDs.length === 0) {
-            this.updateLastIndexingTime(newLastIndexingTime)
+            try {
+              this.updateLastIndexingTime(newLastIndexingTime)
+            } catch (error) {
+              logger.error(error);
+            }
           }
           logger.info('Done processing all relationships');
           return resolve()
