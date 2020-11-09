@@ -263,22 +263,14 @@ class CacheFhirToES {
     return new Promise((resolve, reject) => {
       logger.info('Updating lastIndexingTime')
       axios({
-        url: URI(this.ESBaseURL).segment('syncdata').segment("_update_by_query").addQuery('conflicts', 'proceed').toString(),
-        method: 'POST',
+        url: URI(this.ESBaseURL).segment('syncdata').segment("_doc").segment(index).toString(),
+        method: 'PUT',
         auth: {
           username: this.ESUsername,
           password: this.ESPassword
         },
         data: {
-          script: {
-            lang: "painless",
-            source: `ctx._source.lastIndexingTime='${time}';`
-          },
-          query: {
-            term: {
-              _id: index
-            }
-          }
+          "lastIndexingTime": time
         }
       }).then((response) => {
         if(response.status < 200 && response.status > 299) {
@@ -593,7 +585,11 @@ class CacheFhirToES {
       query = {}
     }
     query.size = 10000
-    let url = URI(this.ESBaseURL).segment(index).segment('_search').addQuery('scroll', '1m').toString()
+    let url = URI(this.ESBaseURL)
+      .segment(index)
+      .segment('_search')
+      .addQuery('scroll', '1m')
+      .toString()
     let scroll_id = null
     async.doWhilst(
       (callback) => {
@@ -952,6 +948,9 @@ class CacheFhirToES {
           ctx += 'ctx._source.' + field.field + "=null;";
         }
         this.getESDocument(index, qry, (err, documents) => {
+          if(err) {
+            logger.error(err);
+          }
           let ids = []
           for(let hit of documents) {
             ids.push(hit._id)
@@ -1097,20 +1096,20 @@ class CacheFhirToES {
           // reportDetails.resource = subject._type;
           this.orderedResources.push(reportDetails);
           IDFields.push(reportDetails.name);
-          this.updateESScrollContext().then(() => {
-            this.updateESCompilationsRate(() => {
-              this.createESIndex(reportDetails.name, IDFields, err => {
-                if (err) {
-                  logger.error('Stop creating report due to error in creating index');
-                  return nxtRelationship();
-                }
-                logger.info('Done creating ES Index');
-                this.getImmediateLinks(links, () => {
-                  async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
-                    this.getLastIndexingTime(orderedResource.name).then(() => {
-                      let newLastIndexingTime = moment()
-                        .subtract('1', 'minutes')
-                        .format('Y-MM-DDTHH:mm:ss');
+          this.getLastIndexingTime(reportDetails.name).then(() => {
+            let newLastIndexingTime = moment()
+              .subtract('1', 'minutes')
+              .format('Y-MM-DDTHH:mm:ss');
+            this.updateESScrollContext().then(() => {
+              this.updateESCompilationsRate(() => {
+                this.createESIndex(reportDetails.name, IDFields, err => {
+                  if (err) {
+                    logger.error('Stop creating report due to error in creating index');
+                    return nxtRelationship();
+                  }
+                  logger.info('Done creating ES Index');
+                  this.getImmediateLinks(links, () => {
+                    async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
                       let processedRecords = []
                       this.count = 1;
                       let offset = 0
@@ -1172,28 +1171,28 @@ class CacheFhirToES {
                           }
                           logger.info('Done Writting resource data for resource ' + orderedResource.name + ' into elastic search');
                           this.fixDataInconsistency(reportDetails, orderedResource, () => {
-                            try {
-                              this.updateLastIndexingTime(newLastIndexingTime, orderedResource.name)
-                            } catch (error) {
-                              logger.error(error);
-                            }
                             return nxtResourceType()
                           })
                         }
                       );
-                    }).catch((err) => {
-                      logger.error(err);
-                    })
-                  }, () => {
-                    return nxtRelationship();
+                    }, () => {
+                      try {
+                        this.updateLastIndexingTime(newLastIndexingTime, reportDetails.name)
+                      } catch (error) {
+                        logger.error(error);
+                      }
+                      return nxtRelationship();
+                    });
                   });
                 });
-              });
+              })
+            }).catch((err) => {
+              logger.error(err);
             })
           }).catch((err) => {
             logger.error(err);
           })
-        }, async() => {
+        }, () => {
           logger.info('Done processing all relationships');
           return resolve()
         });
@@ -1517,6 +1516,10 @@ class CacheFhirToES {
           if(!reverseLink) {
             url = url.addQuery('_id', resIds)
           } else {
+            if(!orderedResource.linkElementSearchParameter) {
+              logger.error('linkElementSearchParameter is missing, cant fix data inconsistency');
+              return callback()
+            }
             url = url.addQuery(orderedResource.linkElementSearchParameter, resIds)
           }
           url = url.toString()
