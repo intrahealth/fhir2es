@@ -1482,89 +1482,95 @@ class CacheFhirToES {
            */
           let reverseLink = false
           // end of reversed linked resources
-          let resIds = ''
-          for(let doc of documents) {
+          let resIds = []
+          async.eachOf(documents, (doc, index, nxtDoc) => {
             if(doc._source['__' + orderedResource.name + '_link']) {
-              if(!resIds) {
+              if(resIds.length === 0) {
                 let linkResType = doc._source['__' + orderedResource.name + '_link'].split('/')[0]
                 if(linkResType !== orderedResource.resource) {
                   reverseLink = true
                   if(ignoreReverseLinked) {
-                    break;
+                    return nxtDoc();
                   }
                 }
               }
-              if(!resIds) {
-                resIds = doc._source['__' + orderedResource.name + '_link']
-              } else {
-                resIds += ',' + doc._source['__' + orderedResource.name + '_link']
-              }
+              resIds.push(doc._source['__' + orderedResource.name + '_link'])
             } else {
               //logger.error(JSON.stringify(doc,0,2));
               //logger.error('There is a serious data inconsistency that needs to be addressed on index ' + reportDetails.name + ' and index id ' + doc._id + ', field ' + '__' + orderedResource.name + '_link' + ' is missing');
-              continue;
+              return nxtDoc();
             }
-          }
-          if(!resIds || resIds == 'null' || (ignoreReverseLinked && reverseLink)) {
-            return callback()
-          }
-          let processedRecords = []
-          me.count = 1;
-          let url = URI(me.FHIRBaseURL)
-            .segment(orderedResource.resource)
-            .addQuery('_count', 200)
-          if(!reverseLink) {
-            url = url.addQuery('_id', resIds)
-          } else {
-            if(!orderedResource.linkElementSearchParameter) {
-              logger.error('linkElementSearchParameter is missing, cant fix data inconsistency');
-              return callback()
+            let ids
+            if(resIds.length === 100 || index === (documents.length - 1)) {
+              ids = resIds.join(',')
+              resIds = []
+            } else {
+              return nxtDoc()
             }
-            url = url.addQuery(orderedResource.linkElementSearchParameter, resIds)
-          }
-          url = url.toString()
-          async.whilst(
-            (callback) => {
-              return callback(null, url !== null)
-            },
-            (callback) => {
-              axios.get(url, {
-                withCredentials: true,
-                auth: {
-                  username: me.FHIRUsername,
-                  password: me.FHIRPassword,
-                },
-              }).then(response => {
-                me.totalResources = response.data.total;
-                url = null;
-                const next = response.data.link.find(
-                  link => link.relation === 'next'
-                );
-                if (next) {
-                  url = next.url
-                }
-                if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
-                  me.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
-                    return callback(null, url);
-                  })
-                } else {
-                  return callback(null, url);
-                }
-              }).catch((err) => {
-                logger.error('Error occured while getting resource data');
-                logger.error(err);
-                return callback(null, null)
-              })
-            },
-            async() => {
-              try {
-                await me.refreshIndex(reportDetails.name);
-              } catch (error) {
-                logger.error(error);
+
+            if(!ids || ids == 'null' || (ignoreReverseLinked && reverseLink)) {
+              return nxtDoc()
+            }
+            let processedRecords = []
+            me.count = 1;
+            let url = URI(me.FHIRBaseURL)
+              .segment(orderedResource.resource)
+              .addQuery('_count', 200)
+            if(!reverseLink) {
+              url = url.addQuery('_id', ids)
+            } else {
+              if(!orderedResource.linkElementSearchParameter) {
+                logger.error('linkElementSearchParameter is missing, cant fix data inconsistency');
+                return callback()
               }
-              return callback()
+              url = url.addQuery(orderedResource.linkElementSearchParameter, ids)
             }
-          )
+            url = url.toString()
+            async.whilst(
+              (callback) => {
+                return callback(null, url !== null)
+              },
+              (callback) => {
+                axios.get(url, {
+                  withCredentials: true,
+                  auth: {
+                    username: me.FHIRUsername,
+                    password: me.FHIRPassword,
+                  },
+                }).then(response => {
+                  me.totalResources = response.data.total;
+                  url = null;
+                  const next = response.data.link.find(
+                    link => link.relation === 'next'
+                  );
+                  if (next) {
+                    url = next.url
+                  }
+                  if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
+                    me.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
+                      return callback(null, url);
+                    })
+                  } else {
+                    return callback(null, url);
+                  }
+                }).catch((err) => {
+                  logger.error('Error occured while getting resource data');
+                  logger.error(err);
+                  return callback(null, null)
+                })
+              },
+              () => {
+                return nxtDoc()
+              }
+            )
+          }, async() => {
+            try {
+              await me.refreshIndex(reportDetails.name);
+            } catch (error) {
+              logger.error(error);
+            }
+            return callback()
+          })
         })
       } catch (error) {
         logger.error(error);

@@ -1,6 +1,6 @@
 {
   "name": "fhir2es",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "Reads and caches fhir data to elasticsearch",
   "main": "reports.js",
   "scripts": {
