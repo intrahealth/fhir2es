@@ -1512,7 +1512,6 @@ class CacheFhirToES {
               return nxtDoc()
             }
             let processedRecords = []
-            me.count = 1;
             let url = URI(me.FHIRBaseURL)
               .segment(orderedResource.resource)
               .addQuery('_count', 200)
@@ -1547,6 +1546,7 @@ class CacheFhirToES {
                     url = next.url
                   }
                   if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
+                    me.count = 1;
                     me.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
                       return callback(null, url);
                     })
