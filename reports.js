@@ -864,9 +864,11 @@ class CacheFhirToES {
               // if nothing was updated and its from the primary (top) resource then create as new
               if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
                 logger.info('No record with id ' + resourceData.id + ' found on elastic search, creating new');
+                let id = record[orderedResource.name].split('/')[1]
                 let url = URI(this.ESBaseURL)
                   .segment(index)
                   .segment('_doc')
+                  .segment(id)
                   .toString();
                 axios({
                     method: 'post',
@@ -1118,6 +1120,7 @@ class CacheFhirToES {
                         .segment('_history')
                         .addQuery('_since', this.lastIndexingTime)
                         .addQuery('_count', 200)
+                        .addQuery('_total', 'accurate')
                         .toString();
                       logger.info(`Processing data for resource ${orderedResource.name}`);
                       async.whilst(
