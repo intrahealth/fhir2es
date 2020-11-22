@@ -69,6 +69,9 @@ class CacheFhirToES {
         .segment(reference)
         .toString()
       axios.get(url, {
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
         withCredentials: true,
         auth: {
           username: this.FHIRUsername,
@@ -175,6 +178,9 @@ class CacheFhirToES {
     url = url.toString();
     axios
       .get(url, {
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
         withCredentials: true,
         auth: {
           username: this.FHIRUsername,
@@ -602,11 +608,13 @@ class CacheFhirToES {
             password: this.ESPassword
           }
         }).then((response) => {
+          if(response.data.hits && response.data.hits.hits && Array.isArray(response.data.hits.hits)) {
+            documents = documents.concat(response.data.hits.hits)
+          }
           if(response.data.hits.hits.length === 0 || !response.data._scroll_id) {
             scroll_id = null
           } else {
             scroll_id = response.data._scroll_id
-            documents = documents.concat(response.data.hits.hits)
             url = URI(this.ESBaseURL).segment('_search').segment('scroll').toString()
             query = {
               scroll_id: scroll_id
@@ -1129,6 +1137,9 @@ class CacheFhirToES {
                         },
                         callback => {
                           axios.get(url, {
+                            headers: {
+                              'Cache-Control': 'no-cache',
+                            },
                             withCredentials: true,
                             auth: {
                               username: this.FHIRUsername,
@@ -1534,6 +1545,9 @@ class CacheFhirToES {
               },
               (callback) => {
                 axios.get(url, {
+                  headers: {
+                    'Cache-Control': 'no-cache',
+                  },
                   withCredentials: true,
                   auth: {
                     username: me.FHIRUsername,
