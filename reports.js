@@ -656,7 +656,7 @@ class CacheFhirToES {
         if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
           logger.warn('Conflict occured, rerunning this request');
           setTimeout(async() => {
-            await deleteESDocument(query, index).then(() => {
+            await this.deleteESDocument(query, index).then(() => {
               return resolve()
             }).catch(() => {
               return reject()
