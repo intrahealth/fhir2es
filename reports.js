@@ -1223,9 +1223,6 @@ class CacheFhirToES {
                   logger.info('Done creating ES Index');
                   this.getImmediateLinks(links, () => {
                     async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
-                      if(orderedResource.resource !== 'Group') {
-                        return nxtResourceType()
-                      }
                       let processedRecords = []
                       this.count = 1;
                       let offset = 0
