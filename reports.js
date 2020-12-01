@@ -226,9 +226,9 @@ class CacheFhirToES {
             return reject()
           }
         }).catch((err) => {
+          logger.error(err);
           logger.error('An error has occured while setting max open scroll context')
-          reject()
-          throw err
+          reject(err)
         })
     })
   }
@@ -720,7 +720,7 @@ class CacheFhirToES {
             let must2 = {
               terms: {}
             }
-            must2.terms[idField] = [record[idField]]
+            must2.terms[idField + '.keyword'] = [record[idField]]
             delQry.query.bool.must.push(must2)
             try {
               await this.deleteESDocument(delQry, index)
@@ -738,14 +738,15 @@ class CacheFhirToES {
           let recordFields = Object.keys(record)
           let checkField = recordFields[recordFields.length - 1]
           for(let linkField in body.query.terms) {
+            let linkFieldWithoutKeyword = linkField.replace('.keyword', '')
             for(let index in body.query.terms[linkField]) {
               // create new row only if there is no checkField or checkField exist but it is different
               let updateThis = documents.find((hit) => {
-                return hit['_source'][linkField] === body.query.terms[linkField][index] && (!hit['_source'][checkField] || hit['_source'][checkField] === record[checkField])
+                return hit['_source'][linkFieldWithoutKeyword] === body.query.terms[linkField][index] && (!hit['_source'][checkField] || hit['_source'][checkField] === record[checkField])
               })
               if(!updateThis) {
                 let hit = documents.find((hit) => {
-                  return hit['_source'][linkField] === body.query.terms[linkField][index]
+                  return hit['_source'][linkFieldWithoutKeyword] === body.query.terms[linkField][index]
                 })
                 if(!hit) {
                   continue;
@@ -807,7 +808,7 @@ class CacheFhirToES {
           let must2 = {
             terms: {}
           }
-          must2.terms[idField] = [record[idField]]
+          must2.terms[idField + '.keyword'] = [record[idField]]
           bodyData.query.bool.must.push(must2)
           bodyData.script = body.script
         } else {
@@ -946,7 +947,7 @@ class CacheFhirToES {
         let recordFields = Object.keys(record)
         let idField = recordFields[recordFields.length - 1]
         let term = {}
-        term[idField] = record[idField]
+        term[idField + '.keyword'] = record[idField]
         qry.query.bool.must = [{
           term
         }]
@@ -961,53 +962,157 @@ class CacheFhirToES {
           if(err) {
             logger.error(err);
           }
+          let queryRelated = {
+            query: {
+              bool: {
+                should: []
+              }
+            }
+          }
+          //save fields that are used to test if two docs are the same
+          let compFieldsRelDocs = []
           let ids = []
           for(let hit of documents) {
             ids.push(hit._id)
+            //if relationship supports multiple rows then construct a query that can get all other documents that has the same field as this,
+            //if we find one then we delete instead of truncate
+            if(orderedResource.multiple) {
+              const name = orderedResource.name
+              let link = '__' + name + '_link'
+              let query = {
+                bool: {
+                  must: []
+                }
+              }
+              for(let field in hit._source) {
+                let must = {
+                  match: {}
+                }
+                let resourceField = orderedResource['http://ihris.org/fhir/StructureDefinition/iHRISReportElement'].find((elements) => {
+                  return elements.find((element) => {
+                    return element.url === 'label' && element.valueString === field
+                  })
+                })
+                if(field === name || field === link || resourceField) {
+                  continue
+                }
+                let exist = compFieldsRelDocs.find((fld) => {
+                  return fld === field
+                })
+                if(!exist) {
+                  compFieldsRelDocs.push(field)
+                }
+                must.match[field] = hit._source[field]
+                query.bool.must.push(must)
+              }
+              queryRelated.query.bool.should.push(query)
+            }
           }
           if(ids.length > 0) {
-            let body = {
-              script: {
-                lang: 'painless',
-                source: ctx
-              },
-              query: {
-                terms: {
-                  _id: ids
-                }
-              },
-            };
-            let url = URI(this.ESBaseURL).segment(index).segment('_update_by_query').addQuery('conflicts', 'proceed').toString();
-            axios({
-              method: 'post',
-              url,
-              data: body,
-              auth: {
-                username: this.ESUsername,
-                password: this.ESPassword,
-              },
-            }).then(response => {
-              return callback(null)
-            }).catch(err => {
-              if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-                logger.warn('Conflict occured, rerunning this request');
-                setTimeout(() => {
-                  logger.error('rerun on conflict is not yet implemented');
-                  return callback(null)
-                }, 2000)
-              } else {
-                logger.error('Error Occured while truncating ES documents');
-                if (err.response && err.response.data) {
-                  logger.error(err.response.data);
-                }
-                if (err.error) {
-                  logger.error(err.error);
-                }
-                if (!err.response) {
-                  logger.error(err);
-                }
-                return callback(null)
+            let relatedDocs = []
+            let getRelatedDocs = new Promise((resolve) => {
+              if(!orderedResource.multiple) {
+                return resolve()
               }
+              this.getESDocument(index, queryRelated, (err, docs) => {
+                relatedDocs = docs
+                return resolve()
+              })
+            })
+            getRelatedDocs.then(() => {
+              //separate IDs whose docs should be truncated with those that should be deleted
+              let deleteIDs = []
+              let truncateIDs = []
+              for(let doc1 of relatedDocs) {
+                for(let doc2 of relatedDocs) {
+                  if(doc1._id === doc2._id) {
+                    continue
+                  }
+                  let same = true
+                  for(let field of compFieldsRelDocs) {
+                    if(doc1._source[field] !== doc2._source[field]) {
+                      same = false
+                      break
+                    }
+                  }
+                  if(same && doc2._source[orderedResource.name] === record[idField]) {
+                    deleteIDs.push(doc2._id)
+                  }
+                }
+              }
+              truncateIDs = ids.filter((id) => {
+                return !deleteIDs.includes(id)
+              })
+              async.parallel({
+                truncate: (callback) => {
+                  if(truncateIDs.length === 0) {
+                    return callback(null)
+                  }
+                  //if relatedDocs is 2 then delete
+                  let body = {
+                    script: {
+                      lang: 'painless',
+                      source: ctx
+                    },
+                    query: {
+                      terms: {
+                        _id: truncateIDs
+                      }
+                    },
+                  };
+                  let url = URI(this.ESBaseURL).segment(index).segment('_update_by_query').addQuery('conflicts', 'proceed').toString();
+                  axios({
+                    method: 'post',
+                    url,
+                    data: body,
+                    auth: {
+                      username: this.ESUsername,
+                      password: this.ESPassword,
+                    },
+                  }).then(response => {
+                    return callback(null)
+                  }).catch(err => {
+                    if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
+                      logger.warn('Conflict occured, rerunning this request');
+                      setTimeout(() => {
+                        logger.error('rerun on conflict is not yet implemented');
+                        return callback(null)
+                      }, 2000)
+                    } else {
+                      logger.error('Error Occured while truncating ES documents');
+                      if (err.response && err.response.data) {
+                        logger.error(err.response.data);
+                      }
+                      if (err.error) {
+                        logger.error(err.error);
+                      }
+                      if (!err.response) {
+                        logger.error(err);
+                      }
+                      return callback(null)
+                    }
+                  })
+                },
+                delete: (callback) => {
+                  if(deleteIDs.length === 0) {
+                    return callback(null)
+                  }
+                  let query = {
+                    query: {
+                      terms: {
+                        _id: deleteIDs
+                      }
+                    }
+                  }
+                  this.deleteESDocument(query, index).then(() => {
+                    return callback(null)
+                  }).catch((err) => {
+                    return callback(null)
+                  })
+                }
+              }, () => {
+                return callback(null)
+              })
             })
           } else {
             return callback(null)
@@ -1107,9 +1212,7 @@ class CacheFhirToES {
           this.orderedResources.push(reportDetails);
           IDFields.push(reportDetails.name);
           this.getLastIndexingTime(reportDetails.name).then(() => {
-            let newLastIndexingTime = moment()
-              .subtract('1', 'minutes')
-              .format('Y-MM-DDTHH:mm:ss');
+            let newLastIndexingTime = moment().subtract('1', 'minutes').format('Y-MM-DDTHH:mm:ss');
             this.updateESScrollContext().then(() => {
               this.updateESCompilationsRate(() => {
                 this.createESIndex(reportDetails.name, IDFields, err => {
@@ -1120,6 +1223,9 @@ class CacheFhirToES {
                   logger.info('Done creating ES Index');
                   this.getImmediateLinks(links, () => {
                     async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
+                      if(orderedResource.resource !== 'Group') {
+                        return nxtResourceType()
+                      }
                       let processedRecords = []
                       this.count = 1;
                       let offset = 0
