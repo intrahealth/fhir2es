@@ -31,6 +31,7 @@ class CacheFhirToES {
     this.ESMaxScrollContext = ESMaxScrollContext
     this.since = since
     this.reset = reset
+    this.deletedRelatedDocs = []
   }
 
   flattenComplex(extension) {
@@ -600,7 +601,7 @@ class CacheFhirToES {
     async.doWhilst(
       (callback) => {
         axios({
-          method: 'GET',
+          method: 'POST',
           url,
           data: query,
           auth: {
@@ -617,6 +618,7 @@ class CacheFhirToES {
             scroll_id = response.data._scroll_id
             url = URI(this.ESBaseURL).segment('_search').segment('scroll').toString()
             query = {
+              scroll: '1m',
               scroll_id: scroll_id
             }
           }
@@ -845,7 +847,7 @@ class CacheFhirToES {
                   })
                 }, 2000)
               } else {
-                logger.error('Error Occured while creating ES document');
+                logger.error('Error occured while updating ES document => updateDocMissingField');
                 if (err.response && err.response.data) {
                   logger.error(err.response.data);
                 }
@@ -892,7 +894,7 @@ class CacheFhirToES {
                     return callback(null)
                   })
                   .catch(err => {
-                    logger.error('Error occured while saving document into ES');
+                    logger.error('Error occured while creating document into ES => updateDocHavingField');
                     logger.error(err);
                     logger.error('Req Data: ' + JSON.stringify(record,0,2));
                     return callback(null)
@@ -909,7 +911,7 @@ class CacheFhirToES {
                   })
                 }, 2000)
               } else {
-                logger.error('Error Occured while creating ES document');
+                logger.error('Error Occured while updating ES document => updateDocHavingField');
                 if (err.response && err.response.data) {
                   logger.error(err.response.data);
                 }
@@ -1035,7 +1037,30 @@ class CacheFhirToES {
                       break
                     }
                   }
-                  if(same && doc2._source[orderedResource.name] === record[idField]) {
+                  if(same) {
+                    let totalDeletedRelDocs = 0
+                    for(let relDoc of this.deletedRelatedDocs) {
+                      let sameAsRelated = true
+                      for(let field of compFieldsRelDocs) {
+                        if(relDoc._source[field] != doc2._source[field]) {
+                          sameAsRelated = false
+                          break
+                        }
+                      }
+                      if(sameAsRelated) {
+                        totalDeletedRelDocs += 1
+                      }
+                    }
+                    // total deleted should always be less by one to all related docs so that the remaining one should only be truncated
+                    if(relatedDocs.length === totalDeletedRelDocs+1) {
+                      continue
+                    }
+                  }
+                  let pushed = deleteIDs.find((id) => {
+                    return id === doc2._id
+                  })
+                  if(same && !pushed && doc2._source[orderedResource.name] === record[idField]) {
+                    this.deletedRelatedDocs.push(doc2)
                     deleteIDs.push(doc2._id)
                   }
                 }
@@ -1223,6 +1248,7 @@ class CacheFhirToES {
                   logger.info('Done creating ES Index');
                   this.getImmediateLinks(links, () => {
                     async.eachSeries(this.orderedResources, (orderedResource, nxtResourceType) => {
+                      this.deletedRelatedDocs = []
                       let processedRecords = []
                       this.count = 1;
                       let offset = 0
@@ -1600,7 +1626,7 @@ class CacheFhirToES {
           let reverseLink = false
           // end of reversed linked resources
           let resIds = []
-          async.eachOf(documents, (doc, index, nxtDoc) => {
+          async.eachOfSeries(documents, (doc, index, nxtDoc) => {
             if(doc._source['__' + orderedResource.name + '_link']) {
               if(resIds.length === 0) {
                 let linkResType = doc._source['__' + orderedResource.name + '_link'].split('/')[0]
