@@ -436,8 +436,12 @@ class CacheFhirToES {
           logger.info('Index not found, creating index ' + name);
           let mappings = {
             mappings: {
-              properties: {},
-            },
+              properties: {
+                lastUpdated: {
+                  type: 'date'
+                }
+              }
+            }
           };
           for (let IDField of IDFields) {
             mappings.mappings.properties[IDField] = {};
@@ -764,6 +768,7 @@ class CacheFhirToES {
             }
           }
           if(Object.keys(newRowBody).length > 0) {
+            newRowBody.lastUpdated = moment().format('Y-MM-DDTHH:mm:ss');
             let url = URI(this.ESBaseURL).segment(index).segment('_doc').toString()
             axios({
               method: 'POST',
@@ -823,6 +828,7 @@ class CacheFhirToES {
               return callback(null)
             }
             let updBodyData = _.cloneDeep(bodyData)
+            updBodyData.script.source += `ctx._source.lastUpdated='${moment().format("Y-MM-DDTHH:mm:ss")}';`
             updBodyData.query.bool.must.splice(1, 1)
             updBodyData.query.bool.must_not = {
               exists: {}
@@ -863,10 +869,12 @@ class CacheFhirToES {
             });
           },
           updateDocHavingField: (callback) => {
+            let updBodyData = _.cloneDeep(bodyData)
+            updBodyData.script.source += `ctx._source.lastUpdated='${moment().format("Y-MM-DDTHH:mm:ss")}';`
             axios({
               method: 'post',
               url,
-              data: bodyData,
+              data: updBodyData,
               auth: {
                 username: this.ESUsername,
                 password: this.ESPassword,
@@ -881,10 +889,12 @@ class CacheFhirToES {
                   .segment('_doc')
                   .segment(id)
                   .toString();
+                let recordData = _.cloneDeep(record)
+                recordData.lastUpdated = moment().format("Y-MM-DDTHH:mm:ss");
                 axios({
                     method: 'post',
                     url,
-                    data: record,
+                    data: recordData,
                     auth: {
                       username: this.ESUsername,
                       password: this.ESPassword,
@@ -960,6 +970,7 @@ class CacheFhirToES {
         for(let field of fields) {
           ctx += 'ctx._source.' + field.field + "=null;";
         }
+        ctx += `ctx._source.lastUpdated='${moment().format('Y-MM-DDTHH:mm:ss')}';`
         this.getESDocument(index, qry, (err, documents) => {
           if(err) {
             logger.error(err);
@@ -995,7 +1006,7 @@ class CacheFhirToES {
                     return element.url === 'label' && element.valueString === field
                   })
                 })
-                if(field === name || field === link || resourceField) {
+                if(field === name || field === link || resourceField || field === 'lastUpdated') {
                   continue
                 }
                 let exist = compFieldsRelDocs.find((fld) => {
@@ -1576,6 +1587,13 @@ class CacheFhirToES {
                 exists: {
                   field: orderedResource.name
                 }
+              },
+              must: {
+                range: {
+                  lastUpdated: {
+                    gte: this.lastIndexingTime
+                  }
+                }
               }
             }
           }
@@ -1595,14 +1613,20 @@ class CacheFhirToES {
         let query = {
           query: {
             bool: {
-              must: {
+              must: [{
                 script: {
                   script: {
                     source: `if(doc['__${orderedResource.name}_link.keyword'].size() != 0 && doc['${orderedResource.name}.keyword'].size() != 0) {if(doc['__${orderedResource.name}_link.keyword'].value != doc['${orderedResource.name}.keyword'].value){return true}}`,
                     lang: "painless"
                   }
                 }
-              }
+              }, {
+                range: {
+                  lastUpdated: {
+                    gte: this.lastIndexingTime
+                  }
+                }
+              }]
             }
           }
         }
