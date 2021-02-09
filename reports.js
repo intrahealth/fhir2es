@@ -1288,12 +1288,12 @@ class CacheFhirToES {
                           }).then(response => {
                             this.totalResources = response.data.total;
                             url = false;
-                            const next = response.data.link.find(
-                              link => link.relation === 'next'
-                            );
-                            if (next) {
-                              url = next.url
-                            }
+                            // const next = response.data.link.find(
+                            //   link => link.relation === 'next'
+                            // );
+                            // if (next) {
+                            //   url = next.url
+                            // }
                             if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
                               //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
                               offset += 200
