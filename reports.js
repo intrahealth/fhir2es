@@ -1288,12 +1288,12 @@ class CacheFhirToES {
                           }).then(response => {
                             this.totalResources = response.data.total;
                             url = false;
-                            // const next = response.data.link.find(
-                            //   link => link.relation === 'next'
-                            // );
-                            // if (next) {
-                            //   url = next.url
-                            // }
+                            const next = response.data.link.find(
+                              link => link.relation === 'next'
+                            );
+                            if (next) {
+                              url = next.url
+                            }
                             if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
                               //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
                               offset += 200
@@ -1313,9 +1313,38 @@ class CacheFhirToES {
                               return callback(null, url);
                             }
                           }).catch(err => {
-                            logger.error('Error occured while getting resource data');
-                            logger.error(err);
-                            return callback(null, false)
+                            // Handle expired cursor
+                            if(err && err.response && err.response.status === 410) {
+                              let newurl = URI(url)
+                              let queries = newurl.query().split('&')
+                              let pageoffset
+                              let count
+                              for(let query of queries) {
+                                let qr = query.split('=')
+                                if(qr[0] === '_getpagesoffset') {
+                                  pageoffset = qr[1]
+                                } else if(qr[0] === '_count') {
+                                  count = qr[1]
+                                }
+                              }
+                              if(!pageoffset) {
+                                logger.error('Error occured while getting resource data');
+                                logger.error(err);
+                                return callback(null, false)
+                              }
+                              url = URI(this.FHIRBaseURL)
+                              .segment(orderedResource.resource)
+                              .segment('_history')
+                              .addQuery('_since', this.lastIndexingTime)
+                              .addQuery('_count', count)
+                              .addQuery('_getpagesoffset', pageoffset)
+                              .toString();
+                              return callback(null, url)
+                            } else {
+                              logger.error('Error occured while getting resource data');
+                              logger.error(err);
+                              return callback(null, false)
+                            }
                           });
                         }, async() => {
                           try {
