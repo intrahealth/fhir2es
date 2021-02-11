@@ -1395,14 +1395,18 @@ class CacheFhirToES {
           return nxtResource()
         }
       }
-      if(!data.request || !data.request.url) {
-        logger.error('Invalid FHIR history data returned');
+
+      let id
+      if(data.resource && data.resource.id) {
+        id = orderedResource.resource + '/' + data.resource.id;
+      } else if(data.request && data.request.url) {
+        let urlArr = data.request.url.split(orderedResource.resource)
+        let resId = urlArr[1].split('/')[1]
+        id = orderedResource.resource + '/' + resId;
+      } else {
+        logger.error('Invalid FHIR data returned');
         return nxtResource()
       }
-
-      let urlArr = data.request.url.split(orderedResource.resource)
-      let resId = urlArr[1].split('/')[1]
-      let id = orderedResource.resource + '/' + resId;
       let processed = processedRecords.find((record) => {
         return record === id
       })
