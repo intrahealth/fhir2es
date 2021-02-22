@@ -9,7 +9,7 @@ let caching = new CacheFhirToES({
   FHIRUsername: '',
   FHIRPassword: '',
   since: '', //use this to specify last updated time of resources to be processed
-  relationshipsIDs: ["testresource"], //if not specified then all relationships will be processed
+  relationshipsIDs: [], //if not specified then all relationships will be processed
   reset: true //will pull all resources if set to true
 })
 caching.cache().then(() => {

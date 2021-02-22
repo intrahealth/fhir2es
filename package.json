@@ -25,7 +25,7 @@
   "homepage": "https://github.com/intrahealth/fhir2es",
   "dependencies": {
     "async": "^3.2.0",
-    "axios": "^0.19.2",
+    "axios": "^0.21.1",
     "fhir": "^4.7.3",
     "fhirpath": "^2.6.2",
     "lodash": "^4.17.15",
