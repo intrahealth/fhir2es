@@ -739,20 +739,23 @@ class CacheFhirToES {
             return callback(null)
           }
           //because this resource supports multiple rows, then we are trying to add new rows
-          let newRowBody = {}
+          let newRows = []
           // take the last field because it is the ID
           let recordFields = Object.keys(record)
           let checkField = recordFields[recordFields.length - 1]
-          for(let linkField in body.query.terms) {
+
+          let terms = _.cloneDeep(body.query.terms)
+          for(let linkField in terms) {
             let linkFieldWithoutKeyword = linkField.replace('.keyword', '')
-            for(let index in body.query.terms[linkField]) {
+            for(let index in terms[linkField]) {
+              let newRowBody = {}
               // create new row only if there is no checkField or checkField exist but it is different
               let updateThis = documents.find((hit) => {
-                return hit['_source'][linkFieldWithoutKeyword] === body.query.terms[linkField][index] && (!hit['_source'][checkField] || hit['_source'][checkField] === record[checkField])
+                return hit['_source'][linkFieldWithoutKeyword] === terms[linkField][index] && (!hit['_source'][checkField] || hit['_source'][checkField] === record[checkField])
               })
               if(!updateThis) {
                 let hit = documents.find((hit) => {
-                  return hit['_source'][linkFieldWithoutKeyword] === body.query.terms[linkField][index]
+                  return hit['_source'][linkFieldWithoutKeyword] === terms[linkField][index]
                 })
                 if(!hit) {
                   continue;
@@ -763,26 +766,36 @@ class CacheFhirToES {
                 for(let recField in record) {
                   newRowBody[recField] = record[recField]
                 }
-                body.query.terms[linkField].splice(index, 1)
+                let trmInd = body.query.terms[linkField].findIndex((trm) => {
+                  return trm === terms[linkField][index]
+                })
+                body.query.terms[linkField].splice(trmInd, 1)
+              }
+              if(Object.keys(newRowBody).length > 0) {
+                newRows.push(newRowBody)
               }
             }
           }
-          if(Object.keys(newRowBody).length > 0) {
-            newRowBody.lastUpdated = moment().format('Y-MM-DDTHH:mm:ss');
-            let url = URI(this.ESBaseURL).segment(index).segment('_doc').toString()
-            axios({
-              method: 'POST',
-              url,
-              auth: {
-                username: this.ESUsername,
-                password: this.ESPassword,
-              },
-              data: newRowBody
-            }).then((response) => {
-              return callback(null)
-            }).catch((err) => {
-              logger.error(err);
-              logger.error('Req Data: ' + JSON.stringify(newRowBody,0,2));
+          if(newRows.length > 0) {
+            async.eachSeries(newRows, (newRowBody, nxt) => {
+              newRowBody.lastUpdated = moment().format('Y-MM-DDTHH:mm:ss');
+              let url = URI(this.ESBaseURL).segment(index).segment('_doc').toString()
+              axios({
+                method: 'POST',
+                url,
+                auth: {
+                  username: this.ESUsername,
+                  password: this.ESPassword,
+                },
+                data: newRowBody
+              }).then((response) => {
+                return nxt()
+              }).catch((err) => {
+                logger.error(err);
+                logger.error('Req Data: ' + JSON.stringify(newRowBody,0,2));
+                return nxt()
+              })
+            }, () => {
               return callback(null)
             })
           } else {
@@ -1384,7 +1397,7 @@ class CacheFhirToES {
   }
 
   processResource(resourceData, orderedResource, reportDetails, processedRecords, callback) {
-    async.each(resourceData, (data, nxtResource) => {
+    async.eachSeries(resourceData, (data, nxtResource) => {
       logger.info('processing ' + this.count + '/' + this.totalResources + ' records of resource ' + orderedResource.resource);
       this.count++
       let deleteRecord = false;
@@ -1468,7 +1481,7 @@ class CacheFhirToES {
           } else if (limitValue && !resourceValue) {
             //delete this entry as it is no longer meet filters
             deleteRecord = true
-          } else if (resourceValue.toString() != limitValue.toString()) {
+          } else if (!Array.isArray(resourceValue) && resourceValue.toString() != limitValue.toString()) {
             //delete this entry as it is no longer meet filters
             deleteRecord = true
           }
