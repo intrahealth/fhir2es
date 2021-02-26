@@ -1397,7 +1397,7 @@ class CacheFhirToES {
   }
 
   processResource(resourceData, orderedResource, reportDetails, processedRecords, callback) {
-    async.eachSeries(resourceData, (data, nxtResource) => {
+    async.each(resourceData, (data, nxtResource) => {
       logger.info('processing ' + this.count + '/' + this.totalResources + ' records of resource ' + orderedResource.resource);
       this.count++
       let deleteRecord = false;
