@@ -173,8 +173,8 @@ class CacheFhirToES {
     let url = URI(this.FHIRBaseURL)
       .segment('Basic')
       .addQuery('code', 'iHRISRelationship');
-    for(let relationship of this.relationshipsIDs) {
-      url.addQuery('_id', relationship);
+    if(this.relationshipsIDs.length > 0) {
+      url.addQuery('_id', this.relationshipsIDs.join(','));
     }
     url = url.toString();
     axios
@@ -400,7 +400,7 @@ class CacheFhirToES {
               return reject()
             });
         } else {
-          logger.error('Error occured while creating ES index');
+          logger.error('Error occured while getting last indexing time in ES');
           logger.error(err);
           logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
           this.lastIndexingTime = '1970-01-01T00:00:00'
@@ -1189,6 +1189,9 @@ class CacheFhirToES {
           let details = relationship.extension.find(ext => ext.url === 'http://ihris.org/fhir/StructureDefinition/iHRISReportDetails');
           let links = relationship.extension.filter(ext => ext.url === 'http://ihris.org/fhir/StructureDefinition/iHRISReportLink');
           let reportDetails = this.flattenComplex(details.extension);
+          if(reportDetails.cachingDisabled === true) {
+            return nxtRelationship()
+          }
           let IDFields = [];
           for (let linkIndex1 in links) {
             let link1 = links[linkIndex1];
@@ -1397,7 +1400,7 @@ class CacheFhirToES {
   }
 
   processResource(resourceData, orderedResource, reportDetails, processedRecords, callback) {
-    async.each(resourceData, (data, nxtResource) => {
+    async.eachSeries(resourceData, (data, nxtResource) => {
       logger.info('processing ' + this.count + '/' + this.totalResources + ' records of resource ' + orderedResource.resource);
       this.count++
       let deleteRecord = false;
@@ -1466,23 +1469,34 @@ class CacheFhirToES {
           let limits = query.split('=');
           let limitParameters = limits[0];
           let limitValue = this.dataTypeConversion(limits[1]);
-          if (!limitValue && limitValue !== false) {
-            limitValue = ''
+          // for OR operator
+          let limitValues
+          if(typeof limitValue === 'string') {
+            limitValues = limitValue.split(',')
+          } else {
+            limitValues = [limitValue]
           }
-          let resourceValue
-          try {
-            resourceValue = fhirpath.evaluate(data.resource, limitParameters);
-          } catch (error) {
-            logger.error(error);
+          let bothMissMatch = true
+          for(let limitValue of limitValues) {
+            if (!limitValue && limitValue !== false) {
+              limitValue = ''
+            }
+            let resourceValue
+            try {
+              resourceValue = fhirpath.evaluate(data.resource, limitParameters);
+            } catch (error) {
+              logger.error(error);
+            }
+            if (Array.isArray(resourceValue) && resourceValue.includes(limitValue)) {
+              bothMissMatch = false
+            } else if (!limitValue && !resourceValue) {
+              bothMissMatch = false
+            } else if (!Array.isArray(resourceValue) && resourceValue.toString() == limitValue.toString()) {
+              bothMissMatch = false
+            }
           }
-          if (Array.isArray(resourceValue) && !resourceValue.includes(limitValue)) {
-            //delete this entry as it is no longer meet filters
-            deleteRecord = true
-          } else if (limitValue && !resourceValue) {
-            //delete this entry as it is no longer meet filters
-            deleteRecord = true
-          } else if (!Array.isArray(resourceValue) && resourceValue.toString() != limitValue.toString()) {
-            //delete this entry as it is no longer meet filters
+          if(bothMissMatch) {
+            //delete from ES (if was added) and exclude this entry as it is no longer meet filters
             deleteRecord = true
           }
         }
@@ -1636,8 +1650,14 @@ class CacheFhirToES {
           };
           if(!deleteRecord) {
             this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource, deleteRecord, () => {
-              return nxtResource();
+              //if this resource supports multiple rows i.e Group linked to Practitioner, then cache resources in series
+              if(orderedResource.multiple) {
+                return nxtResource();
+              }
             })
+            if(!orderedResource.multiple) {
+              return nxtResource();
+            }
           } else {
             //if this is the primary resource then delete the whole document, otherwise delete respective fields data
             if(!orderedResource.hasOwnProperty('linkElement')) {
@@ -1649,8 +1669,14 @@ class CacheFhirToES {
               return nxtResource();
             } else {
               this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource, deleteRecord, () => {
-                return nxtResource();
+                //if this resource supports multiple rows i.e Group linked to Practitioner, then cache resources in series
+                if(orderedResource.multiple) {
+                  return nxtResource();
+                }
               })
+              if(!orderedResource.multiple) {
+                return nxtResource();
+              }
             }
           }
         })();
@@ -1837,14 +1863,16 @@ class CacheFhirToES {
   }
 
   dataTypeConversion(value) {
-    var v = Number (value);
+    let v = Number (value);
     return !isNaN(v) ? v :
-         value === "undefined" ? undefined
-       : value === "null" ? null
-       : value === "true" ? true
-       : value === "false" ? false
-       : value
-    }
+          value === "undefined" ? undefined
+        : value === "null" ? null
+        : value === "true" ? true
+        : value === "false" ? false
+        : value
+  }
+
+
 }
 module.exports = {
   CacheFhirToES
