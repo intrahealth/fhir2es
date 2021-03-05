@@ -1007,13 +1007,11 @@ class CacheFhirToES {
               let link = '__' + name + '_link'
               let query = {
                 bool: {
-                  must: []
+                  must: [],
+                  must_not: []
                 }
               }
               for(let field in hit._source) {
-                let must = {
-                  match: {}
-                }
                 let resourceField = orderedResource['http://ihris.org/fhir/StructureDefinition/iHRISReportElement'].find((elements) => {
                   return elements.find((element) => {
                     return element.url === 'label' && element.valueString === field
@@ -1028,8 +1026,20 @@ class CacheFhirToES {
                 if(!exist) {
                   compFieldsRelDocs.push(field)
                 }
-                must.match[field] = hit._source[field]
-                query.bool.must.push(must)
+                if(hit._source[field] === null) {
+                  let must_not = {
+                    exists: {
+                      field
+                    }
+                  }
+                  query.bool.must_not.push(must_not)
+                } else {
+                  let must = {
+                    match: {}
+                  }
+                  must.match[field] = hit._source[field]
+                  query.bool.must.push(must)
+                }
               }
               queryRelated.query.bool.should.push(query)
             }
@@ -1499,6 +1509,10 @@ class CacheFhirToES {
             //delete from ES (if was added) and exclude this entry as it is no longer meet filters
             deleteRecord = true
           }
+        }
+        //if this resource doesnt meet filter, and no changes made to it, then ignore processing it.
+        if(deleteRecord && data.resource.meta && data.resource.meta.versionId == '1') {
+          return nxtResource();
         }
         let record = {};
         (async () => {
