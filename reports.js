@@ -656,6 +656,7 @@ class CacheFhirToES {
           password: this.ESPassword,
         },
       }).then(response => {
+        this.refreshIndex(index)
         logger.info(JSON.stringify(response.data,0,2));
         return resolve()
       }).catch((err) => {
@@ -687,6 +688,7 @@ class CacheFhirToES {
 
   async updateESDocument(body, record, index, orderedResource, resourceData, tryDeleting, callback) {
     let multiple = orderedResource.multiple
+    let allTerms = _.cloneDeep(body.query.terms)
     // await this.refreshIndex(index);
     //this handles records that should be deleted instead of its fields being truncated
     let recordDeleted = false;
@@ -744,18 +746,17 @@ class CacheFhirToES {
           let recordFields = Object.keys(record)
           let checkField = recordFields[recordFields.length - 1]
 
-          let terms = _.cloneDeep(body.query.terms)
-          for(let linkField in terms) {
+          for(let linkField in allTerms) {
             let linkFieldWithoutKeyword = linkField.replace('.keyword', '')
-            for(let index in terms[linkField]) {
+            for(let index in allTerms[linkField]) {
               let newRowBody = {}
               // create new row only if there is no checkField or checkField exist but it is different
               let updateThis = documents.find((hit) => {
-                return hit['_source'][linkFieldWithoutKeyword] === terms[linkField][index] && (!hit['_source'][checkField] || hit['_source'][checkField] === record[checkField])
+                return hit['_source'][linkFieldWithoutKeyword] === allTerms[linkField][index] && (!hit['_source'][checkField] || hit['_source'][checkField] === record[checkField])
               })
               if(!updateThis) {
                 let hit = documents.find((hit) => {
-                  return hit['_source'][linkFieldWithoutKeyword] === terms[linkField][index]
+                  return hit['_source'][linkFieldWithoutKeyword] === allTerms[linkField][index]
                 })
                 if(!hit) {
                   continue;
@@ -767,7 +768,7 @@ class CacheFhirToES {
                   newRowBody[recField] = record[recField]
                 }
                 let trmInd = body.query.terms[linkField].findIndex((trm) => {
-                  return trm === terms[linkField][index]
+                  return trm === allTerms[linkField][index]
                 })
                 body.query.terms[linkField].splice(trmInd, 1)
               }
@@ -967,7 +968,7 @@ class CacheFhirToES {
           }
         }
         qry.query.bool.must_not = [{
-          terms: body.query.terms
+          terms: allTerms
         }]
         let recordFields = Object.keys(record)
         let idField = recordFields[recordFields.length - 1]
@@ -1073,10 +1074,10 @@ class CacheFhirToES {
                   }
                   if(same) {
                     let totalDeletedRelDocs = 0
-                    for(let relDoc of this.deletedRelatedDocs) {
+                    for(let deletedRelDoc of this.deletedRelatedDocs) {
                       let sameAsRelated = true
                       for(let field of compFieldsRelDocs) {
-                        if(relDoc._source[field] != doc2._source[field]) {
+                        if(deletedRelDoc._source[field] != doc2._source[field]) {
                           sameAsRelated = false
                           break
                         }
@@ -1163,7 +1164,8 @@ class CacheFhirToES {
                       }
                     }
                   }
-                  this.deleteESDocument(query, index).then(() => {
+                  this.deleteESDocument(query, index).then(async() => {
+                    await this.refreshIndex(index);
                     return callback(null)
                   }).catch((err) => {
                     return callback(null)

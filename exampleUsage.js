@@ -5,7 +5,7 @@ let caching = new CacheFhirToES({
   ESPassword: '',
   ESMaxCompilationRate: '100000/1m',
   ESMaxScrollContext: '100000',
-  FHIRBaseURL: 'http://localhost:8081/hapi_kenya/fhir',
+  FHIRBaseURL: 'http://localhost:8081/hapi4/fhir',
   FHIRUsername: '',
   FHIRPassword: '',
   since: '', //use this to specify last updated time of resources to be processed
