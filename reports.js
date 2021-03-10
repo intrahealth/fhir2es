@@ -20,6 +20,7 @@ class CacheFhirToES {
     since,
     reset = false
   }) {
+    this.supportedModifiers = ['missing']
     this.ESBaseURL = ESBaseURL
     this.ESUsername = ESUsername
     this.ESPassword = ESPassword
@@ -1479,8 +1480,19 @@ class CacheFhirToES {
         }
         for (let query of queries) {
           let limits = query.split('=');
-          let limitParameters = limits[0];
-          let limitValue = this.dataTypeConversion(limits[1]);
+          let limitValue = this.dataTypeConversion(limits[limits.length-1]);
+          limits.splice(limits.length-1, 1)
+          limits = limits.join('=')
+          let limitModifier
+          limits = limits.split(':')
+          if(this.supportedModifiers.includes(limits[limits.length-1])) {
+            limitModifier = limits[limits.length-1]
+            limits.splice(limits.length-1, 1)
+            limits = limits.join(':')
+          } else {
+            limits = limits.join(':')
+          }
+          let limitParameters = limits
           // for OR operator
           let limitValues
           if(typeof limitValue === 'string') {
@@ -1499,12 +1511,20 @@ class CacheFhirToES {
             } catch (error) {
               logger.error(error);
             }
-            if (Array.isArray(resourceValue) && resourceValue.includes(limitValue)) {
-              bothMissMatch = false
-            } else if (!limitValue && !resourceValue) {
-              bothMissMatch = false
-            } else if (!Array.isArray(resourceValue) && resourceValue.toString() == limitValue.toString()) {
-              bothMissMatch = false
+            if(limitModifier && limitModifier === 'missing') {
+              if(limitValue === true && ((Array.isArray(resourceValue) && resourceValue.length === 0) || (!Array.isArray(resourceValue) && !resourceValue))) {
+                bothMissMatch = false
+              } else if(limitValue === false && ((Array.isArray(resourceValue) && resourceValue.length > 0) || (!Array.isArray(resourceValue) && resourceValue))) {
+                bothMissMatch = false
+              }
+            } else {
+              if (Array.isArray(resourceValue) && resourceValue.includes(limitValue)) {
+                bothMissMatch = false
+              } else if (!limitValue && !resourceValue) {
+                bothMissMatch = false
+              } else if (!Array.isArray(resourceValue) && resourceValue.toString() == limitValue.toString()) {
+                bothMissMatch = false
+              }
             }
           }
           if(bothMissMatch) {
