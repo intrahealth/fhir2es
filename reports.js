@@ -512,6 +512,16 @@ class CacheFhirToES {
               return resolve();
             })
           }, 2000)
+        } else if (err.response && err.response.status === 429) {
+          logger.warn('ES is overloaded with too many requests, delaying for 2 seconds');
+          setTimeout(() => {
+            this.refreshIndex(index, (err) => {
+              if(err) {
+                return reject();
+              }
+              return resolve();
+            })
+          }, 2000)
         } else {
           logger.error('Error Occured while refreshing index');
           if (err.response && err.response.data) {
@@ -629,10 +639,17 @@ class CacheFhirToES {
           }
           return callback(null)
         }).catch((err) => {
-          error = err
-          logger.error(err);
-          scroll_id = null
-          return callback(null)
+          if(err.response && err.response.status === 429) {
+            logger.warn('ES is overloaded with too many requests, delaying for 2 seconds');
+            setTimeout(() => {
+              return callback(null)
+            }, 2000);
+          } else {
+            error = err
+            logger.error(err);
+            scroll_id = null
+            return callback(null)
+          }
         })
       },
       (callback) => {
@@ -670,6 +687,15 @@ class CacheFhirToES {
               return reject()
             })
           }, 2000)
+        } else if (err.response && err.response.status === 429) {
+          logger.warn('ES is overloaded with too many requests, delaying for 2 seconds');
+          setTimeout(async() => {
+            await this.deleteESDocument(query, index).then(() => {
+              return resolve()
+            }).catch(() => {
+              return reject()
+            })
+          }, 2000)
         } else {
           logger.error('Error Occured while deleting ES document');
           if (err.response && err.response.data) {
@@ -686,6 +712,60 @@ class CacheFhirToES {
       });
     })
   };
+
+  sendESRequest({
+    url,
+    method,
+    data
+  }) {
+    return new Promise((resolve, reject) => {
+      let options = {
+        url,
+        method,
+        auth: {
+          username: this.ESUsername,
+          password: this.ESPassword
+        }
+      }
+      if(data) {
+        options.data = data
+      }
+      axios(options).then((response) => {
+        resolve(response)
+      }).catch((err) => {
+        if (err.response && (err.response.status === 429 || err.response.statusText === 'Conflict' || err.response.status === 409)) {
+          if(err.response.status === 429) {
+            logger.warn('ES is overloaded with too many requests, delaying for 2 seconds');
+          }
+          if(err.response.status === 409) {
+            logger.warn('Conflict occured, rerunning this request');
+          }
+          setTimeout(() => {
+            this.sendESRequest({url, method, data}).then(() => {
+              resolve()
+            })
+          }, 2000)
+        } else {
+          let error = {}
+          if (err.response && err.response.data) {
+            error = {
+              error: err.response.data
+            }
+          } else if(err.error) {
+            error.error = err.error
+          } else {
+            error.error = err
+          }
+          if(data) {
+            error['Req Data'] = data
+          }
+          error.url = url
+          logger.error(JSON.stringify(error, 0, 2));
+          reject()
+        }
+      })
+    })
+  }
 
   async updateESDocument(body, record, index, orderedResource, resourceData, tryDeleting, callback) {
     let multiple = orderedResource.multiple
@@ -782,19 +862,13 @@ class CacheFhirToES {
             async.eachSeries(newRows, (newRowBody, nxt) => {
               newRowBody.lastUpdated = moment().format('Y-MM-DDTHH:mm:ss');
               let url = URI(this.ESBaseURL).segment(index).segment('_doc').toString()
-              axios({
-                method: 'POST',
+              this.sendESRequest({
                 url,
-                auth: {
-                  username: this.ESUsername,
-                  password: this.ESPassword,
-                },
+                method: 'POST',
                 data: newRowBody
-              }).then((response) => {
+              }).then(() => {
                 return nxt()
-              }).catch((err) => {
-                logger.error(err);
-                logger.error('Req Data: ' + JSON.stringify(newRowBody,0,2));
+              }).catch(() => {
                 return nxt()
               })
             }, () => {
@@ -849,52 +923,24 @@ class CacheFhirToES {
               exists: {}
             }
             updBodyData.query.bool.must_not.exists.field = idField
-            axios({
-              method: 'post',
+            this.sendESRequest({
               url,
-              data: updBodyData,
-              auth: {
-                username: this.ESUsername,
-                password: this.ESPassword,
-              },
-            }).then(response => {
+              method: 'POST',
+              data: updBodyData
+            }).then(() => {
               return callback(null)
-            }).catch(err => {
-              if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-                logger.warn('Conflict occured, rerunning this request');
-                setTimeout(() => {
-                  this.updateESDocument(body, record, index, orderedResource, resourceData, tryDeleting, () => {
-                    return callback(null)
-                  })
-                }, 2000)
-              } else {
-                logger.error('Error occured while updating ES document => updateDocMissingField');
-                if (err.response && err.response.data) {
-                  logger.error(err.response.data);
-                }
-                if (err.error) {
-                  logger.error(err.error);
-                }
-                if (!err.response) {
-                  logger.error(err);
-                }
-                logger.error('Req Data: ' + JSON.stringify(updBodyData,0,2));
-                return callback(null)
-              }
-            });
+            }).catch(() => {
+              return callback(null)
+            })
           },
           updateDocHavingField: (callback) => {
             let updBodyData = _.cloneDeep(bodyData)
             updBodyData.script.source += `ctx._source.lastUpdated='${moment().format("Y-MM-DDTHH:mm:ss")}';`
-            axios({
-              method: 'post',
+            this.sendESRequest({
               url,
-              data: updBodyData,
-              auth: {
-                username: this.ESUsername,
-                password: this.ESPassword,
-              },
-            }).then(response => {
+              method: 'POST',
+              data: updBodyData
+            }).then((response) => {
               // if nothing was updated and its from the primary (top) resource then create as new
               if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
                 logger.info('No record with id ' + resourceData.id + ' found on elastic search, creating new');
@@ -906,50 +952,21 @@ class CacheFhirToES {
                   .toString();
                 let recordData = _.cloneDeep(record)
                 recordData.lastUpdated = moment().format("Y-MM-DDTHH:mm:ss");
-                axios({
-                    method: 'post',
-                    url,
-                    data: recordData,
-                    auth: {
-                      username: this.ESUsername,
-                      password: this.ESPassword,
-                    },
-                  })
-                  .then(response => {
-                    return callback(null)
-                  })
-                  .catch(err => {
-                    logger.error('Error occured while creating document into ES => updateDocHavingField');
-                    logger.error(err);
-                    logger.error('Req Data: ' + JSON.stringify(record,0,2));
-                    return callback(null)
-                  });
+                this.sendESRequest({
+                  url,
+                  method: 'POST',
+                  data: recordData
+                }).then(() => {
+                  return callback(null)
+                }).catch(() => {
+                  return callback(null)
+                })
               } else {
                 return callback(null)
               }
-            }).catch(err => {
-              if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-                logger.warn('Conflict occured, rerunning this request');
-                setTimeout(() => {
-                  this.updateESDocument(body, record, index, orderedResource, resourceData, tryDeleting, () => {
-                    return callback(null)
-                  })
-                }, 2000)
-              } else {
-                logger.error('Error Occured while updating ES document => updateDocHavingField');
-                if (err.response && err.response.data) {
-                  logger.error(err.response.data);
-                }
-                if (err.error) {
-                  logger.error(err.error);
-                }
-                if (!err.response) {
-                  logger.error(err);
-                }
-                logger.error('Req Data: ' + JSON.stringify(bodyData,0,2));
-                return callback(null)
-              }
-            });
+            }).catch(() => {
+              return callback(null)
+            })
           }
         }, () => {
           return callback(null)
@@ -1122,36 +1139,14 @@ class CacheFhirToES {
                     },
                   };
                   let url = URI(this.ESBaseURL).segment(index).segment('_update_by_query').addQuery('conflicts', 'proceed').toString();
-                  axios({
-                    method: 'post',
+                  this.sendESRequest({
                     url,
-                    data: body,
-                    auth: {
-                      username: this.ESUsername,
-                      password: this.ESPassword,
-                    },
-                  }).then(response => {
+                    method: 'POST',
+                    data: body
+                  }).then(() => {
                     return callback(null)
-                  }).catch(err => {
-                    if (err.response && (err.response.statusText === 'Conflict' || err.response.status === 409)) {
-                      logger.warn('Conflict occured, rerunning this request');
-                      setTimeout(() => {
-                        logger.error('rerun on conflict is not yet implemented');
-                        return callback(null)
-                      }, 2000)
-                    } else {
-                      logger.error('Error Occured while truncating ES documents');
-                      if (err.response && err.response.data) {
-                        logger.error(err.response.data);
-                      }
-                      if (err.error) {
-                        logger.error(err.error);
-                      }
-                      if (!err.response) {
-                        logger.error(err);
-                      }
-                      return callback(null)
-                    }
+                  }).catch(() => {
+                    return callback(null)
                   })
                 },
                 delete: (callback) => {
