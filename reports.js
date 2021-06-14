@@ -167,6 +167,9 @@ class CacheFhirToES {
       } else {
         return callback();
       }
+    }).catch((err) => {
+      logger.error(err);
+      return callback();
     });
   };
 
@@ -267,7 +270,7 @@ class CacheFhirToES {
       })
   }
 
-  updateLastIndexingTime(time, index) {
+  updateLastIndexingTime(start, ended, index) {
     return new Promise((resolve, reject) => {
       logger.info('Updating lastIndexingTime')
       axios({
@@ -278,7 +281,8 @@ class CacheFhirToES {
           password: this.ESPassword
         },
         data: {
-          "lastIndexingTime": time
+          "lastBeganIndexingTime": start,
+          "lastEndedIndexingTime": ended
         }
       }).then((response) => {
         if(response.status < 200 && response.status > 299) {
@@ -297,7 +301,8 @@ class CacheFhirToES {
   getLastIndexingTime(index) {
     return new Promise((resolve, reject) => {
       if(this.since && !this.reset) {
-        this.lastIndexingTime = this.since
+        this.lastBeganIndexingTime = this.since
+        this.lastEndedIndexingTime = this.since
         return resolve()
       }
       logger.info('Getting lastIndexingTime')
@@ -319,25 +324,32 @@ class CacheFhirToES {
       }).then((response) => {
         if(this.reset) {
           logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
-          this.lastIndexingTime = '1970-01-01T00:00:00'
+          this.lastBeganIndexingTime = '1970-01-01T00:00:00'
+          this.lastEndedIndexingTime = '1970-01-01T00:00:00'
           return resolve()
         }
         if(response.data.hits.hits.length === 0) {
           logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
-          this.lastIndexingTime = '1970-01-01T00:00:00'
+          this.lastBeganIndexingTime = '1970-01-01T00:00:00'
+          this.lastEndedIndexingTime = '1970-01-01T00:00:00'
           return resolve()
         }
-        logger.info('Returning lastIndexingTime of ' + response.data.hits.hits[0]._source.lastIndexingTime)
-        this.lastIndexingTime = response.data.hits.hits[0]._source.lastIndexingTime
+        logger.info('Returning lastBeganIndexingTime of ' + response.data.hits.hits[0]._source.lastBeganIndexingTime)
+        this.lastBeganIndexingTime = response.data.hits.hits[0]._source.lastBeganIndexingTime
+        this.lastEndedIndexingTime = response.data.hits.hits[0]._source.lastEndedIndexingTime
         return resolve()
       }).catch((err) => {
         if (err.response && err.response.status && err.response.status === 404) {
-          this.lastIndexingTime = '1970-01-01T00:00:00'
+          this.lastBeganIndexingTime = '1970-01-01T00:00:00'
+          this.lastEndedIndexingTime = '1970-01-01T00:00:00'
           logger.info('Index not found, creating index syncData');
           let mappings = {
             mappings: {
               properties: {
-                lastIndexingTime: {
+                lastBeganIndexingTime: {
+                  type: "text"
+                },
+                lastEndedIndexingTime: {
                   type: "text"
                 }
               },
@@ -356,11 +368,11 @@ class CacheFhirToES {
               if (response.status !== 200) {
                 logger.error('Something went wrong and index was not created');
                 logger.error(response.data);
-                logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+                logger.info('Returning lastBeganIndexingTime of 1970-01-01T00:00:00')
                 return reject()
               } else {
                 logger.info('Index syncdata created successfully');
-                logger.info('Adding default lastIndexTime which is 1970-01-01T00:00:00')
+                logger.info('Adding default lastBeganIndexingTime which is 1970-01-01T00:00:00')
                 axios({
                   method: 'PUT',
                   auth: {
@@ -369,7 +381,8 @@ class CacheFhirToES {
                   },
                   url: URI(this.ESBaseURL).segment('syncdata').segment("_doc").segment(index).toString(),
                   data: {
-                    "lastIndexingTime": "1970-01-01T00:00:00"
+                    "lastBeganIndexingTime": "1970-01-01T00:00:00",
+                    "lastEndedIndexingTime": "1970-01-01T00:00:00"
                   }
                 }).then((response) => {
                   if(response.status >= 200 && response.status <= 299) {
@@ -378,7 +391,7 @@ class CacheFhirToES {
                     logger.error('An error has occured while saving default lastIndexTime');
                     return reject()
                   }
-                  logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+                  logger.info('Returning lastBeganIndexingTime of 1970-01-01T00:00:00')
                   return resolve()
                 }).catch((err) => {
                   logger.error('An error has occured while saving default lastIndexTime');
@@ -397,14 +410,15 @@ class CacheFhirToES {
             })
             .catch(err => {
               logger.error('Error: ' + err);
-              logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
+              logger.info('Returning lastBeganIndexingTime of 1970-01-01T00:00:00')
               return reject()
             });
         } else {
           logger.error('Error occured while getting last indexing time in ES');
           logger.error(err);
-          logger.info('Returning lastIndexingTime of 1970-01-01T00:00:00')
-          this.lastIndexingTime = '1970-01-01T00:00:00'
+          logger.info('Returning lastBeganIndexingTime of 1970-01-01T00:00:00')
+          this.lastBeganIndexingTime = '1970-01-01T00:00:00'
+          this.lastEndedIndexingTime = '1970-01-01T00:00:00'
           return reject()
         }
       })
@@ -743,8 +757,11 @@ class CacheFhirToES {
           setTimeout(() => {
             this.sendESRequest({url, method, data}).then(() => {
               resolve()
+            }).catch((err) => {
+              logger.error(err);
+              reject()
             })
-          }, 2000)
+          }, 700)
         } else {
           let error = {}
           if (err.response && err.response.data) {
@@ -1164,12 +1181,16 @@ class CacheFhirToES {
                     await this.refreshIndex(index);
                     return callback(null)
                   }).catch((err) => {
+                    logger.error(err);
                     return callback(null)
                   })
                 }
               }, () => {
                 return callback(null)
               })
+            }).catch((err) => {
+              logger.error(err);
+              return callback(null);
             })
           } else {
             return callback(null)
@@ -1272,7 +1293,7 @@ class CacheFhirToES {
           this.orderedResources.push(reportDetails);
           IDFields.push(reportDetails.name);
           this.getLastIndexingTime(reportDetails.name).then(() => {
-            let newLastIndexingTime = moment().subtract('1', 'minutes').format('Y-MM-DDTHH:mm:ss');
+            let newLastBeganIndexingTime = moment().format('Y-MM-DDTHH:mm:ss');
             this.updateESScrollContext().then(() => {
               this.updateESCompilationsRate(() => {
                 this.createESIndex(reportDetails.name, IDFields, err => {
@@ -1290,7 +1311,7 @@ class CacheFhirToES {
                       let url = URI(this.FHIRBaseURL)
                         .segment(orderedResource.resource)
                         .segment('_history')
-                        .addQuery('_since', this.lastIndexingTime)
+                        .addQuery('_since', this.lastBeganIndexingTime)
                         .addQuery('_count', 200)
                         .addQuery('_total', 'accurate')
                         .toString();
@@ -1325,12 +1346,12 @@ class CacheFhirToES {
                                 url = URI(this.FHIRBaseURL)
                                 .segment(orderedResource.resource)
                                 .segment('_history')
-                                .addQuery('_since', this.lastIndexingTime)
+                                .addQuery('_since', this.lastBeganIndexingTime)
                                 .addQuery('_count', 200)
                                 .addQuery('_getpagesoffset', offset)
                                 .toString();
                               }
-                              this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
+                              this.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, false, () => {
                                 return callback(null, url);
                               })
                             } else {
@@ -1359,7 +1380,7 @@ class CacheFhirToES {
                               url = URI(this.FHIRBaseURL)
                               .segment(orderedResource.resource)
                               .segment('_history')
-                              .addQuery('_since', this.lastIndexingTime)
+                              .addQuery('_since', this.lastBeganIndexingTime)
                               .addQuery('_count', count)
                               .addQuery('_getpagesoffset', pageoffset)
                               .toString();
@@ -1384,7 +1405,8 @@ class CacheFhirToES {
                       );
                     }, () => {
                       try {
-                        this.updateLastIndexingTime(newLastIndexingTime, reportDetails.name)
+                        let newLastEndedIndexingTime = moment().format('Y-MM-DDTHH:mm:ss');
+                        this.updateLastIndexingTime(newLastBeganIndexingTime, newLastEndedIndexingTime, reportDetails.name)
                       } catch (error) {
                         logger.error(error);
                       }
@@ -1395,9 +1417,11 @@ class CacheFhirToES {
               })
             }).catch((err) => {
               logger.error(err);
+              return nxtRelationship();
             })
           }).catch((err) => {
             logger.error(err);
+            return nxtRelationship();
           })
         }, () => {
           logger.info('Done processing all relationships');
@@ -1407,7 +1431,7 @@ class CacheFhirToES {
     })
   }
 
-  processResource(resourceData, orderedResource, reportDetails, processedRecords, callback) {
+  processResource(resourceData, orderedResource, reportDetails, processedRecords, wait, callback) {
     async.eachSeries(resourceData, (data, nxtResource) => {
       logger.info('processing ' + this.count + '/' + this.totalResources + ' records of resource ' + orderedResource.resource);
       this.count++
@@ -1682,11 +1706,11 @@ class CacheFhirToES {
           if(!deleteRecord) {
             this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource, deleteRecord, () => {
               //if this resource supports multiple rows i.e Group linked to Practitioner, then cache resources in series
-              if(orderedResource.multiple) {
+              if(orderedResource.multiple || wait) {
                 return nxtResource();
               }
             })
-            if(!orderedResource.multiple) {
+            if(!orderedResource.multiple && !wait) {
               return nxtResource();
             }
           } else {
@@ -1701,16 +1725,19 @@ class CacheFhirToES {
             } else {
               this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource, deleteRecord, () => {
                 //if this resource supports multiple rows i.e Group linked to Practitioner, then cache resources in series
-                if(orderedResource.multiple) {
+                if(orderedResource.multiple || wait) {
                   return nxtResource();
                 }
               })
-              if(!orderedResource.multiple) {
+              if(!orderedResource.multiple && !wait) {
                 return nxtResource();
               }
             }
           }
         })();
+      }).catch((err) => {
+        logger.error(err);
+        return nxtResource();
       })
     }, () => {
       return callback()
@@ -1722,7 +1749,11 @@ class CacheFhirToES {
     //these must be run in series
     let fieldStillMissing = false
     async.series({
-      //this fix missing data i.e __location_link is available but location is missing
+      /**
+       * this fix missing data i.e __location_link is available but location is missing
+       * Example: PractitionerRole didn't have a location, then later on a location get assigned to this PractitionerRole,
+       * Location resource will not be pulled as it was not changed, it is the PractitionerRole alone that was updated, this piece of code will check and force an update.
+       */
       fixMissing: (callback) => {
         let query = {
           query: {
@@ -1735,7 +1766,7 @@ class CacheFhirToES {
               must: {
                 range: {
                   lastUpdated: {
-                    gte: this.lastIndexingTime
+                    gt: this.lastEndedIndexingTime
                   }
                 }
               }
@@ -1767,7 +1798,7 @@ class CacheFhirToES {
               }, {
                 range: {
                   lastUpdated: {
-                    gte: this.lastIndexingTime
+                    gt: this.lastEndedIndexingTime
                   }
                 }
               }]
@@ -1861,7 +1892,7 @@ class CacheFhirToES {
                   }
                   if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
                     me.count = 1;
-                    me.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, () => {
+                    me.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, false, () => {
                       return callback(null, url);
                     })
                   } else {
