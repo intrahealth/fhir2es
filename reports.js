@@ -1585,7 +1585,21 @@ class CacheFhirToES {
               }
               let displayData
               try {
-                displayData = fhirpath.evaluate(data.resource, fieldName);
+                if(fieldName.startsWith('concat(')) {
+                  fieldName = fieldName.substring(7, fieldName.length-1)
+                }
+                let fieldNames = fieldName.split(',')
+                for(let fname of fieldNames) {
+                  let value = fhirpath.evaluate(data.resource, fname);
+                  if(Array.isArray(value)) {
+                    value = value.join(',')
+                  }
+                  if(!displayData) {
+                    displayData = value
+                  } else {
+                    displayData += ' ' + value
+                  }
+                }
               } catch (error) {
                 logger.error(error);
               }
