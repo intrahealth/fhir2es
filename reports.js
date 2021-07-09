@@ -5,6 +5,7 @@ const moment = require('moment')
 const logger = require('./winston')
 const URI = require('urijs');
 const _ = require('lodash');
+const { v5: uuid5 } = require('uuid');
 const fhirpath = require('fhirpath');
 class CacheFhirToES {
   constructor({
@@ -20,7 +21,6 @@ class CacheFhirToES {
     since,
     reset = false
   }) {
-    this.supportedModifiers = ['missing']
     this.ESBaseURL = ESBaseURL
     this.ESUsername = ESUsername
     this.ESPassword = ESPassword
@@ -784,7 +784,7 @@ class CacheFhirToES {
     })
   }
 
-  async updateESDocument(body, record, index, orderedResource, resourceData, tryDeleting, callback) {
+  async updateESDocument(body, record, index, orderedResource, resourceData, tryDeleting, extraTerms, callback) {
     let multiple = orderedResource.multiple
     let allTerms = _.cloneDeep(body.query.terms)
     // await this.refreshIndex(index);
@@ -798,9 +798,14 @@ class CacheFhirToES {
         }
         let query = {
           query: {
-            terms: body.query.terms
+            bool: {
+              must: [{
+                terms: body.query.terms
+              }]
+            }
           }
         }
+        query.query.bool.must = query.query.bool.must.concat(extraTerms)
         this.getESDocument(index, query, async(err, documents) => {
           if(err) {
             logger.error('Req Data: ' + JSON.stringify(query,0,2));
@@ -828,6 +833,7 @@ class CacheFhirToES {
             }
             must2.terms[idField + '.keyword'] = [record[idField]]
             delQry.query.bool.must.push(must2)
+            delQry.query.bool.must = delQry.query.bool.must.concat(extraTerms)
             try {
               await this.deleteESDocument(delQry, index)
             } catch (error) {
@@ -923,6 +929,7 @@ class CacheFhirToES {
           }
           must2.terms[idField + '.keyword'] = [record[idField]]
           bodyData.query.bool.must.push(must2)
+          bodyData.query.bool.must = bodyData.query.bool.must.concat(extraTerms)
           bodyData.script = body.script
         } else {
           bodyData = body
@@ -936,10 +943,12 @@ class CacheFhirToES {
             let updBodyData = _.cloneDeep(bodyData)
             updBodyData.script.source += `ctx._source.lastUpdated='${moment().format("Y-MM-DDTHH:mm:ss")}';`
             updBodyData.query.bool.must.splice(1, 1)
-            updBodyData.query.bool.must_not = {
+
+            let must_not = {
               exists: {}
             }
-            updBodyData.query.bool.must_not.exists.field = idField
+            must_not.exists.field = idField
+            updBodyData.query.bool.must_not = [must_not]
             this.sendESRequest({
               url,
               method: 'POST',
@@ -962,6 +971,13 @@ class CacheFhirToES {
               if (response.data.updated == 0 && !orderedResource.hasOwnProperty('linkElement')) {
                 logger.info('No record with id ' + resourceData.id + ' found on elastic search, creating new');
                 let id = record[orderedResource.name].split('/')[1]
+                if(extraTerms.length > 0) {
+                  let ids = [id]
+                  for(let extraTerm of extraTerms) {
+                    ids.push(Object.values(extraTerm.terms)[0][0].split('/')[1])
+                  }
+                  id = this.generateId(ids)
+                }
                 let url = URI(this.ESBaseURL)
                   .segment(index)
                   .segment('_doc')
@@ -1012,6 +1028,8 @@ class CacheFhirToES {
         qry.query.bool.must = [{
           term
         }]
+        //include extra terms
+        qry.query.bool.must = qry.query.bool.must.concat(extraTerms)
         let childrenResources = this.getChildrenResources(orderedResource.name);
         childrenResources.unshift(orderedResource)
         let fields = this.getResourcesFields(childrenResources)
@@ -1205,7 +1223,6 @@ class CacheFhirToES {
   cache() {
     return new Promise(async(resolve) => {
       this.getReportRelationship((err, relationships) => {
-        logger.error(relationships);
         if (err) {
           return;
         }
@@ -1493,63 +1510,14 @@ class CacheFhirToES {
         }
       })
       getDeletedResProm.then(() => {
-        let queries = [];
-        // just in case there are multiple queries
         if (orderedResource.query) {
-          queries = orderedResource.query.split('&');
-        }
-        for (let query of queries) {
-          let limits = query.split('=');
-          let limitValue = this.dataTypeConversion(limits[limits.length-1]);
-          limits.splice(limits.length-1, 1)
-          limits = limits.join('=')
-          let limitModifier
-          limits = limits.split(':')
-          if(this.supportedModifiers.includes(limits[limits.length-1])) {
-            limitModifier = limits[limits.length-1]
-            limits.splice(limits.length-1, 1)
-            limits = limits.join(':')
-          } else {
-            limits = limits.join(':')
-          }
-          let limitParameters = limits
-          // for OR operator
-          let limitValues
-          if(typeof limitValue === 'string') {
-            limitValues = limitValue.split(',')
-          } else {
-            limitValues = [limitValue]
-          }
-          let bothMissMatch = true
-          for(let limitValue of limitValues) {
-            if (!limitValue && limitValue !== false) {
-              limitValue = ''
+          try {
+            let queryResult = fhirpath.evaluate(data.resource, orderedResource.query);
+            if((Array.isArray(queryResult) && (queryResult.includes(false) || queryResult.length === 0)) || queryResult === false) {
+              deleteRecord = true
             }
-            let resourceValue
-            try {
-              resourceValue = fhirpath.evaluate(data.resource, limitParameters);
-            } catch (error) {
-              logger.error(error);
-            }
-            if(limitModifier && limitModifier === 'missing') {
-              if(limitValue === true && ((Array.isArray(resourceValue) && resourceValue.length === 0) || (!Array.isArray(resourceValue) && !resourceValue))) {
-                bothMissMatch = false
-              } else if(limitValue === false && ((Array.isArray(resourceValue) && resourceValue.length > 0) || (!Array.isArray(resourceValue) && resourceValue))) {
-                bothMissMatch = false
-              }
-            } else {
-              if (Array.isArray(resourceValue) && resourceValue.includes(limitValue)) {
-                bothMissMatch = false
-              } else if (!limitValue && !resourceValue) {
-                bothMissMatch = false
-              } else if (!Array.isArray(resourceValue) && resourceValue.toString() == limitValue.toString()) {
-                bothMissMatch = false
-              }
-            }
-          }
-          if(bothMissMatch) {
-            //delete from ES (if was added) and exclude this entry as it is no longer meet filters
-            deleteRecord = true
+          } catch (error) {
+            logger.error(error);
           }
         }
         //if this resource doesnt meet filter, and no changes made to it, then ignore processing it.
@@ -1727,37 +1695,92 @@ class CacheFhirToES {
               terms: match ,
             },
           };
-          if(!deleteRecord) {
-            this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource, deleteRecord, () => {
-              //if this resource supports multiple rows i.e Group linked to Practitioner, then cache resources in series
-              if(orderedResource.multiple || wait) {
-                return nxtResource();
+          // check if linkTo (__linkname_link) has a cardinality of 1..* and dupplicate the request per linkTo
+          let dupBasedOnfields = []
+          for(let rec in record) {
+            if(rec.startsWith('__') && rec.endsWith('_link') && record[rec] && record[rec].split(',').length > 1) {
+              dupBasedOnfields.push(rec)
+            }
+          }
+          let modifiedRecAndBody = []
+          if(dupBasedOnfields.length > 0) {
+            for(let index in dupBasedOnfields) {
+              let dupBasedOnfield = dupBasedOnfields[index]
+              if(modifiedRecAndBody.length > 0) {
+                let partialMods = []
+                for(let modIndex in modifiedRecAndBody) {
+                  modified = modifiedRecAndBody[modIndex]
+                  let partialMod = this.dupplicateRequest(modified.record, modified.body, dupBasedOnfield)
+                  partialMods = partialMods.concat(partialMod)
+                }
+                modifiedRecAndBody = partialMods
+              } else {
+                modifiedRecAndBody = this.dupplicateRequest(record, body, dupBasedOnfield)
               }
-            })
-            if(!orderedResource.multiple && !wait) {
-              return nxtResource();
             }
           } else {
-            //if this is the primary resource then delete the whole document, otherwise delete respective fields data
-            if(!orderedResource.hasOwnProperty('linkElement')) {
-              try {
-                await this.deleteESDocument({query: body.query}, reportDetails.name)
-              } catch (error) {
-                logger.error(error);
+            modifiedRecAndBody = [{
+              record,
+              body
+            }]
+          }
+          async.eachSeries(modifiedRecAndBody, (modified, nxtMod) => {
+            let extraTerms = []
+            if(dupBasedOnfields.length > 0) {
+              for(let dupBasedOnfield of dupBasedOnfields) {
+                let tmpTerm = {
+                  terms: {}
+                }
+                tmpTerm.terms[dupBasedOnfield + '.keyword'] = [modified.record[dupBasedOnfield]]
+                extraTerms.push(tmpTerm)
               }
-              return nxtResource();
-            } else {
-              this.updateESDocument(body, record, reportDetails.name, orderedResource, data.resource, deleteRecord, () => {
+            }
+            if(!deleteRecord) {
+              this.updateESDocument(modified.body, modified.record, reportDetails.name, orderedResource, data.resource, deleteRecord, extraTerms, () => {
                 //if this resource supports multiple rows i.e Group linked to Practitioner, then cache resources in series
                 if(orderedResource.multiple || wait) {
-                  return nxtResource();
+                  return nxtMod()
                 }
               })
               if(!orderedResource.multiple && !wait) {
-                return nxtResource();
+                return nxtMod()
+              }
+            } else {
+              //if this is the primary resource then delete the whole document, otherwise delete respective fields data
+              if(!orderedResource.hasOwnProperty('linkElement')) {
+                let query = {
+                  query: {
+                    bool: {
+                      must: [{
+                        terms: modified.body.query.terms
+                      }]
+                    }
+                  }
+                }
+                if(extraTerms.length > 0) {
+                  query.query.bool.must = query.query.bool.must.concat(extraTerms)
+                }
+                this.deleteESDocument(query, reportDetails.name).then(() => {
+                  return nxtMod()
+                }).catch((err) => {
+                  logger.error(err);
+                  return nxtMod()
+                })
+              } else {
+                this.updateESDocument(modified.body, modified.record, reportDetails.name, orderedResource, data.resource, deleteRecord, extraTerms, () => {
+                  //if this resource supports multiple rows i.e Group linked to Practitioner, then cache resources in series
+                  if(orderedResource.multiple || wait) {
+                    return nxtMod()
+                  }
+                })
+                if(!orderedResource.multiple && !wait) {
+                  return nxtMod()
+                }
               }
             }
-          }
+          }, () => {
+            return nxtResource();
+          })
         })();
       }).catch((err) => {
         logger.error(err);
@@ -1980,6 +2003,40 @@ class CacheFhirToES {
       }
     }
     return modifiedValue
+  }
+
+  dupplicateRequest(record, body, dupBasedOnfield) {
+    let modifiedData = []
+    let links = record[dupBasedOnfield].split(',')
+    for(let link of links) {
+      let newRecord = _.cloneDeep(record)
+      newRecord[dupBasedOnfield] = link
+      let newBody = _.cloneDeep(body)
+      let source = newBody.script.source
+      let sources = source.split(';')
+      for(let index in sources) {
+        if(sources[index].startsWith(`ctx._source.${dupBasedOnfield}`)) {
+          sources[index] = `ctx._source.${dupBasedOnfield}='${link}'`
+          break
+        }
+      }
+      newBody.script.source = sources.join(';')
+      modifiedData.push({
+        record: newRecord,
+        body: newBody
+      })
+    }
+    return modifiedData
+  }
+
+  generateId(ids) {
+    if(!ids || !Array.isArray(ids) || ids.length === 0) {
+      return ids
+    }
+    if(ids.length < 2) {
+      return ids[0]
+    }
+    return uuid5(ids.join(''), '8f84db7c-93f9-4800-8aa2-1c8913a1dc54')
   }
 
   dataTypeConversion(value) {
