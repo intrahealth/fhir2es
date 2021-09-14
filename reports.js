@@ -1035,7 +1035,7 @@ class CacheFhirToES {
         let fields = this.getResourcesFields(childrenResources)
         let ctx = ''
         for(let field of fields) {
-          ctx += 'ctx._source.' + field.field + "=null;";
+          ctx += `ctx._source['${field.field}']=null;`;
         }
         ctx += `ctx._source.lastUpdated='${moment().format('Y-MM-DDTHH:mm:ss')}';`
         this.getESDocument(index, qry, (err, documents) => {
@@ -1357,7 +1357,7 @@ class CacheFhirToES {
                             if (next) {
                               url = next.url
                             }
-                            if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
+                            if (response.data.entry && response.data.entry.length > 0) {
                               //if hapi server doesnt have support for returning the next cursor then use _getpagesoffset
                               offset += 200
                               if(offset <= this.totalResources && !url) {
@@ -1373,7 +1373,12 @@ class CacheFhirToES {
                                 return callback(null, url);
                               })
                             } else {
-                              return callback(null, url);
+                              if(response.data.type) {
+                                url = false
+                                return callback(null, url);
+                              } else {
+                                return callback(null, url);
+                              }
                             }
                           }).catch(err => {
                             // Handle expired cursor
@@ -1473,9 +1478,13 @@ class CacheFhirToES {
         logger.error('Invalid FHIR data returned');
         return nxtResource()
       }
-      let processed = processedRecords.find((record) => {
-        return record === id
-      })
+      let processed
+      for(let k=0;k<processedRecords.length;k++) {
+        if(processedRecords[k] === id) {
+          processed = processedRecords[k]
+          break
+        }
+      }
       if (!processed) {
         processedRecords.push(id)
       } else {
@@ -1517,11 +1526,12 @@ class CacheFhirToES {
               deleteRecord = true
             }
           } catch (error) {
-            logger.error(error);
+            logger.error(`Invalid fhirpath supplied ${orderedResource.query}`)
+            process.exit()
           }
         }
         //if this resource doesnt meet filter, and no changes made to it, then ignore processing it.
-        if(deleteRecord && data.resource.meta && data.resource.meta.versionId == '1') {
+        if((deleteRecord && data.resource.meta && data.resource.meta.versionId == '1') || (deleteRecord && this.lastBeganIndexingTime === '1970-01-01T00:00:00')) {
           return nxtResource();
         }
         let record = {};
@@ -1562,7 +1572,13 @@ class CacheFhirToES {
                 }
                 let fieldNames = fieldName.split(',')
                 for(let fname of fieldNames) {
-                  let value = fhirpath.evaluate(data.resource, fname);
+                  let value
+                  try {
+                    value = fhirpath.evaluate(data.resource, fname);
+                  } catch (error) {
+                    logger.error(`Invalid fhirpath supplied ${fname}`)
+                    process.exit()
+                  }
                   if(Array.isArray(value)) {
                     value = value.join(',')
                   }
@@ -1635,7 +1651,8 @@ class CacheFhirToES {
             try {
               linkTo = fhirpath.evaluate(data.resource, linkElement);
             } catch (error) {
-              logger.error(error);
+              logger.error(`Invalid fhirpath supplied ${linkElement}`);
+              process.exit()
             }
             if (linkElement === 'id') {
               linkTo = orderedResource.resource + '/' + linkTo
@@ -1665,16 +1682,16 @@ class CacheFhirToES {
               record[field] = recordFieldArr.join('');
             }
             if(deleteRecord || !record[field]) {
-              ctx += 'ctx._source.' + field + "=null;";
+              ctx += `ctx._source['${field}']=null;`;
               if(field.startsWith('__')) {
                 let truncateResources = this.getChildrenResources(orderedResource.name)
                 let truncateFields = this.getResourcesFields(truncateResources)
                 for(let truncField of truncateFields) {
-                  ctx += 'ctx._source.' + truncField.field + "=null;";
+                  ctx += `ctx._source['${truncField.field}']=null;`;
                 }
               }
             } else {
-              ctx += 'ctx._source.' + field + "='" + record[field] + "';";
+              ctx += `ctx._source['${field}']='${record[field]}';`;
             }
           }
           // truncate fields of any other resources that are linked to this resource
@@ -1682,7 +1699,7 @@ class CacheFhirToES {
             let childrenResources = this.getChildrenResources(orderedResource.name);
             let fields = this.getResourcesFields(childrenResources)
             for(let field of fields) {
-              ctx += 'ctx._source.' + field.field + "=null;";
+              ctx += `ctx._source['${field.field}']=null;`;
             }
           }
 
@@ -1802,6 +1819,10 @@ class CacheFhirToES {
        * Location resource will not be pulled as it was not changed, it is the PractitionerRole alone that was updated, this piece of code will check and force an update.
        */
       fixMissing: (callback) => {
+        //ignore reversed linked resources as it doesnt apply for them i.e role linked to practitioner, it doesnt ignore when practitioner is linked to role
+        if((orderedResource.linkTo && orderedResource.linkTo.split('.').length === 1) || (orderedResource.linkTo && orderedResource.linkTo.split('.').length === 2 && orderedResource.linkTo.split('.')[1] === 'id')) {
+          return callback(null)
+        }
         let query = {
           query: {
             bool: {
@@ -1829,6 +1850,10 @@ class CacheFhirToES {
       },
       //this fix invalid data i.e __location_link not equal to location, and location is always invalid, not __location_link
       differences: (callback) => {
+        //ignore reversed linked resources as it doesnt apply for them i.e role linked to practitioner, it doesnt ignore when practitioner is linked to role
+        if((orderedResource.linkTo && orderedResource.linkTo.split('.').length === 1) || (orderedResource.linkTo && orderedResource.linkTo.split('.').length === 2 && orderedResource.linkTo.split('.')[1] === 'id')) {
+          return callback(null)
+        }
         if(!orderedResource.linkElement || fieldStillMissing) {
           return callback(null)
         }
@@ -1937,7 +1962,7 @@ class CacheFhirToES {
                   if (next) {
                     url = next.url
                   }
-                  if (response.data.total > 0 && response.data.entry && response.data.entry.length > 0) {
+                  if (response.data.entry && response.data.entry.length > 0) {
                     me.count = 1;
                     me.processResource(response.data.entry, orderedResource, reportDetails, processedRecords, false, () => {
                       return callback(null, url);
