@@ -1,6 +1,6 @@
 {
   "name": "fhir2es",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "Reads and caches fhir data to elasticsearch",
   "main": "reports.js",
   "scripts": {
@@ -26,7 +26,6 @@
   "dependencies": {
     "async": "^3.2.0",
     "axios": "^0.21.1",
-    "fhir": "^4.7.3",
     "fhirpath": "^3.5.0",
     "lodash": "^4.17.15",
     "moment": "^2.29.0",
