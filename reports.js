@@ -104,6 +104,78 @@ class CacheFhirToES {
     })
   }
 
+  resourceDisplayName(resource, displayFormat) {
+    return new Promise((resolve) => {
+      let details = {}
+      let valformat = displayFormat && displayFormat.extension.find((ext) => {
+        return ext.url === 'format'
+      })
+      if(valformat) {
+        details.format = valformat.valueString
+      }
+      let valorder = displayFormat && displayFormat.extension.find((ext) => {
+        return ext.url === 'order'
+      })
+      let paths = displayFormat && displayFormat.extension.filter((ext) => {
+        return ext.url.startsWith("paths:")
+      })
+      if(valorder) {
+        details.order = valorder.valueString
+      } else {
+        if(paths) {
+          for(let path of paths) {
+            path = path.url.split(":")
+            if(path.length > 1) {
+              if(!details.order) {
+                details.order = path[1]
+              } else {
+                details.order += ',' + path[1]
+              }
+            }
+          }
+        }
+      }
+      if(paths && paths.length > 0) {
+        details.paths = {}
+        for(let path of paths) {
+          let url = path.url.split(":")
+          if(url.length > 1) {
+            details.paths[url[1]] = {
+              fhirpath: path.valueString
+            }
+          }
+        }
+      }
+      if(!details.order && !details.paths) {
+        let name = resource.name
+        if(!name) {
+          name = resource.extension && resource.extension.find((ext) => {
+            return ext.url === 'http://ihris.org/fhir/StructureDefinition/ihris-basic-name'
+          })
+          if(name) {
+            name = name.valueString
+          }
+        }
+        return resolve(name)
+      }
+      let format = details.format || "%s"
+      let output = []
+      let order = details.order.split(',')
+      if ( details.fhirpath ) {
+        output.push( FHIRPath.evaluate( resource, details.fhirpath ).join( details.join || " " ) )
+      } else if ( details.paths ) {
+        for ( let ord of order ) {
+          ord = ord.trim()
+          output.push( FHIRPath.evaluate( resource, details.paths[ ord ].fhirpath ).join( details.paths[ord].join || " " ) )
+        }
+      }
+      for(let val of output) {
+        format = format.replace('%s', val)
+      }
+      return resolve(format)
+    })
+  }
+
   /**
    *
    * @param {Array} extension
@@ -1609,6 +1681,16 @@ class CacheFhirToES {
                     process.exit()
                   }
                   if(Array.isArray(value)) {
+                    for(let val of value) {
+                      if(val.reference) {
+                        let displayFormat = element.find((el) => {
+                          return el.url === 'displayformat'
+                        })
+                        let refResource = await this.getResourceFromReference(val.reference)
+                        value = await this.resourceDisplayName(refResource, displayFormat)
+                        value = [value]
+                      }
+                    }
                     value = value.join(',')
                   }
                   if(!displayData) {
