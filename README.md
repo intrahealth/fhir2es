@@ -167,6 +167,9 @@ Fields of a resource can be added using iHRISReportElement complex extension whi
 
 - display - This is the display name of the field that will appear on the report.
 - name - This is the field unique name on the entire relationship.
+- filter - Whether the field to be used as a filter on your report.
+- dropDownFilter - Whether a field should be a dropdown or a text field filter.
+- order - Order of the field on the report. Order number starts from 0.
 - fhirpath - This is the fhirpath expression for field value on the relationship
 - displayFormat - This can be defined if you are intending to modify or format the way field value is displayed i.e Adding extra texts to a value or even combining two fields values into a single display. This is a complex extension with below subextensions
   - format - This defines how you want to format the display, parameters are defined with %s. i.e if you are displaying age and you want the value to appear as 16 Years Old, the format will be %s Years Old, %s will be replaced with a respecitve age. Or if you want to display Full name instead of firstname and othernames separately, you can do %s %s as seen in below example
@@ -174,58 +177,61 @@ Fields of a resource can be added using iHRISReportElement complex extension whi
   - paths:parameter_name:fhirpath - This now defines a fhirpath expression of all the parameter names defined with the order element. i.e in above we have given,family in order element, this means we must define fhirpath for both i.e paths:given:fhirpath = name.where(use='official').given and paths:family:fhirpath = name.where(use='official').family.
   - paths:parameter_name:join - This is optional, and it is used to join an array of values when a field is expected to contain an array of values. i.e we know given is an array, you can define paths:given:join = ", " to join given names with coma.
   displayFormat and fhirpath cant be defined together, you either define fhirpath or you define displayFormat
-- function - fhir2es allows you to define your own custom functions and use them to calculate field value. functions are defined within a module and they do accepts parameters. If you are running fhir2es inside iHRIS then your module function must be defined inside your custom site under the path iHRIS/ihris-backend/sitename/modules/es. If you are running fhir2es outside iHRIS then you will have to define manually the base path to your modules, and this is done when creating fhir2es class using ESModulesBasePath: "/home/ally/mysoftware/modules/es". i.e
+- function - fhir2es allows you to define your own custom functions and use them to calculate field value. functions are defined within a module and they do accepts parameters.
+  - If you are running fhir2es inside iHRIS then your module function must be defined inside your custom site under the path iHRIS/ihris-backend/sitename/modules/es. - If you are running fhir2es outside iHRIS then you will have to define manually the base path to your modules, and this is done when creating fhir2es class using ESModulesBasePath: "/home/ally/mysoftware/modules/es". i.e
 
-```
-const { CacheFhirToES } = require('./reports')
-let caching = new CacheFhirToES({
-  ESBaseURL: 'http://localhost:9200',
-  ESUsername: '',
-  ESPassword: '',
-  ESMaxCompilationRate: '100000/1m',
-  ESMaxScrollContext: '100000',
-  FHIRBaseURL: 'http://localhost:8081/bwihris/fhir',
-  FHIRUsername: '',
-  FHIRPassword: '',
-  since: '', //use this to specify last updated time of resources to be processed
-  relationshipsIDs: ['ihris-es-report-pp-staffs'], //if not specified then all relationships will be processed
-  reset: true, //will pull all resources if set to true
-  ESModulesBasePath: "/home/ally/mysoftware/modules/es"
-})
-caching.cache().then(() => {
-  console.log('Done')
-})
-```
+  ```
+  const { CacheFhirToES } = require('./reports')
+  let caching = new CacheFhirToES({
+    ESBaseURL: 'http://localhost:9200',
+    ESUsername: '',
+    ESPassword: '',
+    ESMaxCompilationRate: '100000/1m',
+    ESMaxScrollContext: '100000',
+    FHIRBaseURL: 'http://localhost:8081/bwihris/fhir',
+    FHIRUsername: '',
+    FHIRPassword: '',
+    since: '', //use this to specify last updated time of resources to be processed
+    relationshipsIDs: ['ihris-es-report-pp-staffs'], //if not specified then all relationships will be processed
+    reset: true, //will pull all resources if set to true
+    ESModulesBasePath: "/home/ally/mysoftware/modules/es"
+  })
+  caching.cache().then(() => {
+    console.log('Done')
+  })
+  ```
 
-So if you want to calculate age from date of birth, you will first need to create a nodejs module file in the format as defined below
+  - So if you want to calculate age from date of birth, you will first need to create a nodejs module file in the format as defined below
 
-```
+  ```
 
-const testmodule = {
-  
-}
-
-module.exports = testmodule
-```
-
-Then from there you can define your functions within the module as in below
-
-```
-const moment = require("moment")
-
-const testmodule = {
-  age: (fields) => {
-    return new Promise((resolve, reject) => {
-      let age = moment().diff(fields.dob, 'years');
-      resolve(age)
-    })
+  const testmodule = {
+    
   }
-}
 
-module.exports = testmodule
-```
+  module.exports = testmodule
+  ```
 
-You are allowed to have multiple functions within the module.
-**Module functions must return a promise.**
-Within the relationship file, a module function is defined by specifying the name of the file containing you functions, followed by the function name and any required parameters i.e testmodule.age({dob}).
-Parameter names are the fields that are already added on your relationship, it could be within the same linked resource or other resources within the relationship.
+  - Then from there you can define your functions within the module as in below
+
+  ```
+  const moment = require("moment")
+
+  const testmodule = {
+    age: (fields) => {
+      return new Promise((resolve, reject) => {
+        let age = moment().diff(fields.dob, 'years');
+        resolve(age)
+      })
+    }
+  }
+
+  module.exports = testmodule
+  ```
+
+  - You are allowed to have multiple functions within the module.
+  - **Module functions must return a promise.**
+  - Within the relationship file, a module function is defined by specifying the name of the file containing your functions, followed by the function name and any required parameters i.e testmodule.age({dob}).
+  - Parameter names are the fields that are already added on your relationship, it could be within the same linked resource or other resources within the relationship.
+  - **function parameters must be enclosed between ({}) brackets, and for more than one parameters, separate them with coma i.e testmodule.age({dob, name})**
+  - A field that uses function must be defined on your relationship after the fields it depends (parameters) i.e Age field must be defined after date of birth field.
