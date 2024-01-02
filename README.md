@@ -170,6 +170,7 @@ Fields of a resource can be added using iHRISReportElement complex extension whi
 - filter - Whether the field to be used as a filter on your report.
 - dropDownFilter - Whether a field should be a dropdown or a text field filter.
 - order - Order of the field on the report. Order number starts from 0.
+- multiple - Incase more than one resources are matched, they will be combined if multiple is set to true, otherwise only one resource will be used.
 - fhirpath - This is the fhirpath expression for field value on the relationship
 - displayFormat - This can be defined if you are intending to modify or format the way field value is displayed i.e Adding extra texts to a value or even combining two fields values into a single display. This is a complex extension with below subextensions
   - format - This defines how you want to format the display, parameters are defined with %s. i.e if you are displaying age and you want the value to appear as 16 Years Old, the format will be %s Years Old, %s will be replaced with a respecitve age. Or if you want to display Full name instead of firstname and othernames separately, you can do %s %s as seen in below example
@@ -236,8 +237,8 @@ Fields of a resource can be added using iHRISReportElement complex extension whi
   - **function parameters must be enclosed between ({}) brackets, and for more than one parameters, separate them with coma i.e testmodule.age({dob, name})**
   - A field that uses function must be defined on your relationship after the fields it depends (parameters) i.e Age field must be defined after date of birth field.
   - Fields that resolves to a reference can be used as well, fhir2es will use the corresponding resource name as value or you may define the displayFormat and specify the value for the field. An example could be, if you are adding PractitionerRole on the relationship, you can add a field Location by specifying fhirpath PractitionerRole.location and fhir2es will take of resolving the Location resource. Additionally you may specify a displayFormat to be used as covered above.
-  - If you enable locationBasedContraint, make sure that you have a field ihris-related-group on your relationship which has a fhirpath resolving to a location.
-  
+  - If you enable locationBasedConstraint, make sure that you have a field ihris-related-group on your relationship which has a fhirpath resolving to a location.
+
   Here is a full example
 
 ```
