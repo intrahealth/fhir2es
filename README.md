@@ -235,3 +235,244 @@ Fields of a resource can be added using iHRISReportElement complex extension whi
   - Parameter names are the fields that are already added on your relationship, it could be within the same linked resource or other resources within the relationship.
   - **function parameters must be enclosed between ({}) brackets, and for more than one parameters, separate them with coma i.e testmodule.age({dob, name})**
   - A field that uses function must be defined on your relationship after the fields it depends (parameters) i.e Age field must be defined after date of birth field.
+  - Fields that resolves to a reference can be used as well, fhir2es will use the corresponding resource name as value or you may define the displayFormat and specify the value for the field. An example could be, if you are adding PractitionerRole on the relationship, you can add a field Location by specifying fhirpath PractitionerRole.location and fhir2es will take of resolving the Location resource. Additionally you may specify a displayFormat to be used as covered above.
+  - If you enable locationBasedContraint, make sure that you have a field ihris-related-group on your relationship which has a fhirpath resolving to a location.
+  
+  Here is a full example
+
+```
+{
+  resourceType: "Basic",
+  id: "ihris-es-report-staffs",
+  meta: {
+    profile: ["http://ihris.org/StructureDefinition/iHRISRelationship"]
+  },
+  extension: [{
+    url: "http://ihris.org/StructureDefinition/iHRISReportDetails",
+    extension: [{
+      url: "label",
+      valueString: "Practitioners License Registration"
+    }, {
+      url: "displayCheckbox",
+      valueBoolean: false
+    }, {
+      url: "name",
+      valueString: "licenseregistration"
+    }, {
+      url: "locationBasedConstraint",
+      valueBoolean: true
+    }, {
+      url: "resource",
+      valueString: "Basic"
+    }, {
+      "url": "initialFilter",
+      "valueString": "_profile=http://ihris.org/fhir/StructureDefinition/registration-license-profile"
+    }, {
+      url: "query",
+      valueString: "Basic.meta.profile.contains('http://ihris.org/fhir/StructureDefinition/registration-license-profile')"
+    }, {
+      "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+      "extension": [{
+        "url": "display",
+        "valueString": "Cadre"
+      }, {
+        "url": "name",
+        "valueString": "cadre"
+      }, {
+        "url": "fhirpath",
+        "valueString": "Basic.extension.where(url='http://ihris.org/fhir/StructureDefinition/cadre').valueCoding.display"
+      }, {
+        "url": "filter",
+        "valueBoolean": true
+      }, {
+        "url": "dropDownFilter",
+        "valueBoolean": true
+      }, {
+        "url": "order",
+        "valueInteger": 0
+      }]
+    }, {
+      "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+      "extension": [{
+        "url": "display",
+        "valueString": "Registration Number"
+      }, {
+        "url": "name",
+        "valueString": "registrationnumber"
+      }, {
+        "url": "fhirpath",
+        "valueString": "Basic.extension.where(url='http://ihris.org/fhir/StructureDefinition/registration-number').valueString"
+      }, {
+        "url": "filter",
+        "valueBoolean": true
+      }, {
+        "url": "dropDownFilter",
+        "valueBoolean": false
+      }, {
+        "url": "order",
+        "valueInteger": 1
+      }]
+    }]
+  }, {
+    "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportLink",
+    "extension": [{
+        "url": "name",
+        "valueString": "practitioner"
+      },
+      {
+        "url": "resource",
+        "valueString": "Practitioner"
+      }, {
+        "url": "query",
+        "valueString": "Practitioner.meta.tag.where(system='http://ihris.org/fhir/CodeSystem/boards' and code='nmcb').exists()"
+      }, {
+        "url": "initialFilter",
+        "valueString": "_tag=nmcb"
+      }, {
+        "url": "linkElement",
+        "valueString": "Practitioner.id"
+      },
+      {
+        "url": "linkTo",
+        "valueString": "nmcbregistration.extension.where(url='http://ihris.org/fhir/StructureDefinition/ihris-practitioner-reference').valueReference.reference"
+      },
+      {
+        "url": "multiple",
+        "valueBoolean": false
+      }, {
+        "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+        "extension": [{
+          "url": "display",
+          "valueString": "Fullname"
+        }, {
+          "url": "name",
+          "valueString": "fullname"
+        }, {
+          "url": "displayformat",
+          "extension": [{
+            "url": "format",
+            "valueString": "%s, %s"
+          }, {
+            "url": "order",
+            "valueString": "given, family"
+          }, {
+            "url": "paths:given:fhirpath",
+            "valueString": "name.where(use='official').given"
+          }, {
+            "url": "paths:given:join",
+            "valueString": "-"
+          }, {
+            "url": "paths:family:fhirpath",
+            "valueString": "name.where(use='official').family"
+          }]
+        }, {
+          "url": "filter",
+          "valueBoolean": true
+        }, {
+          "url": "dropDownFilter",
+          "valueBoolean": false
+        }, {
+          "url": "order",
+          "valueInteger": 2
+        }]
+      }, {
+        "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+        "extension": [{
+          "url": "display",
+          "valueString": "Gender"
+        }, {
+          "url": "name",
+          "valueString": "gender"
+        }, {
+          "url": "fhirpath",
+          "valueString": "gender"
+        }, {
+          "url": "filter",
+          "valueBoolean": true
+        }, {
+          "url": "dropDownFilter",
+          "valueBoolean": true
+        }, {
+          "url": "order",
+          "valueInteger": 3
+        }]
+      }, {
+        "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+        "extension": [{
+          "url": "display",
+          "valueString": "Nationality"
+        }, {
+          "url": "name",
+          "valueString": "nationality"
+        }, {
+          "url": "fhirpath",
+          "valueString": "extension.where(url='http://ihris.org/fhir/StructureDefinition/ihris-nationality').valueCoding.display"
+        }, {
+          "url": "filter",
+          "valueBoolean": true
+        }, {
+          "url": "dropDownFilter",
+          "valueBoolean": true
+        }, {
+          "url": "order",
+          "valueInteger": 4
+        }]
+      }, {
+        "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+        "extension": [{
+          "url": "display",
+          "valueString": "Date of Birth"
+        }, {
+          "url": "name",
+          "valueString": "dob"
+        }, {
+          "url": "fhirpath",
+          "valueString": "birthDate"
+        }, {
+          "url": "filter",
+          "valueBoolean": true
+        }, {
+          "url": "dropDownFilter",
+          "valueBoolean": false
+        }, {
+          "url": "order",
+          "valueInteger": 5
+        }]
+      }, {
+        "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+        "extension": [{
+          "url": "display",
+          "valueString": "Age"
+        }, {
+          "url": "name",
+          "valueString": "age"
+        }, {
+          "url": "function",
+          "valueString": "testmodule.age({dob})"
+        }, {
+          "url": "parameters",
+          "valueString": "dob"
+        }, {
+          "url": "filter",
+          "valueBoolean": true
+        }, {
+          "url": "dropDownFilter",
+          "valueBoolean": true
+        }, {
+          "url": "order",
+          "valueInteger": 6
+        }]
+      }, {
+        "url": "http://ihris.org/fhir/StructureDefinition/iHRISReportElement",
+        "extension": [{
+          "url": "name",
+          "valueString": "ihris-related-group"
+        }, {
+          "url": "fhirpath",
+          "valueString": "extension.where(url='http://ihris.org/fhir/StructureDefinition/ihris-related-group').extension.where(url='location').valueString"
+        }]
+      }
+    ]
+  }]
+}
+```
