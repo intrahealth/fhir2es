@@ -93,7 +93,6 @@ class CacheFhirToES {
           password: this.FHIRPassword
         },
       }).then(response => {
-        logger.info('sending back response');
         return resolve(response.data)
       }).catch((err) => {
         logger.error('Error occured while getting resource reference');
@@ -2240,7 +2239,7 @@ class CacheFhirToES {
       let source = newBody.script.source
       let sources = source.split(';')
       for(let index in sources) {
-        if(sources[index].startsWith(`ctx._source.${dupBasedOnfield}`)) {
+        if(sources[index].startsWith(`ctx._source['${dupBasedOnfield}']`) || sources[index].startsWith(`ctx._source["${dupBasedOnfield}"]`) || sources[index].startsWith(`ctx._source.${dupBasedOnfield}`)) {
           sources[index] = `ctx._source.${dupBasedOnfield}='${link}'`
           break
         }

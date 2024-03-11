@@ -1,6 +1,6 @@
 {
   "name": "fhir2es",
-  "version": "5.0.3",
+  "version": "5.0.4",
   "description": "Reads and caches fhir data to elasticsearch",
   "main": "reports.js",
   "scripts": {
@@ -15,7 +15,8 @@
     "fhir2es",
     "fhir",
     "elasticsearch",
-    "elasticsearch caching"
+    "elasticsearch caching",
+    "sql on fhir"
   ],
   "author": "Ally Shaban",
   "license": "ISC",

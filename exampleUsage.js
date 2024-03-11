@@ -5,13 +5,13 @@ let caching = new CacheFhirToES({
   ESPassword: '',
   ESMaxCompilationRate: '100000/1m',
   ESMaxScrollContext: '100000',
-  FHIRBaseURL: 'http://localhost:8081/bwihris/fhir',
+  FHIRBaseURL: 'http://localhost:8081/fhir',
   FHIRUsername: '',
   FHIRPassword: '',
   since: '', //use this to specify last updated time of resources to be processed
-  relationshipsIDs: ['ihris-es-report-pp-staffs'], //if not specified then all relationships will be processed
+  relationshipsIDs: ['ihris-es-report-mhero-send-message'], //if not specified then all relationships will be processed
   reset: true, //will pull all resources if set to true
-  ESModulesBasePath: "/home/ally/iHRIS/ihris-backend/hr4health/modules/es"
+  ESModulesBasePath: "/var/lib/iHRIS/ihris-backend/hr4health/modules/es"
 })
 caching.cache().then(() => {
   console.log('Done')
