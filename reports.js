@@ -1800,7 +1800,7 @@ class CacheFhirToES {
               logger.error(error);
             }
             let value
-            if ((!displayData || (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined)) && data.resource.extension) {
+            if (((!displayData && displayData != 0) || (Array.isArray(displayData) && displayData.length === 1 && displayData[0] === undefined)) && data.resource.extension) {
               try {
                 value = await this.getElementValFromExtension(data.resource.extension, fhirpath)
               } catch (error) {

@@ -9,9 +9,9 @@ let caching = new CacheFhirToES({
   FHIRUsername: '',
   FHIRPassword: '',
   since: '', //use this to specify last updated time of resources to be processed
-  relationshipsIDs: ['ihris-es-report-mhero-send-message'], //if not specified then all relationships will be processed
+  relationshipsIDs: ['ihris-es-report-position-list'], //if not specified then all relationships will be processed
   reset: true, //will pull all resources if set to true
-  ESModulesBasePath: "/var/lib/iHRIS/ihris-backend/hr4health/modules/es"
+  ESModulesBasePath: "/home/ally/iHRIS/ihris-backend/namibia/modules/es"
 })
 caching.cache().then(() => {
   console.log('Done')
