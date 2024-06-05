@@ -179,10 +179,13 @@ class CacheFhirToES {
   }
 
   /**
-   *
-   * @param {Array} extension
-   * @param {String} element
-   */
+ * Retrieves the value of a specific element from the given extension array.
+ * 
+ * @param {Array} extension - The array of extensions to search for the element value.
+ * @param {String} element - The element to retrieve the value for.
+ * @returns {Promise} A promise that resolves with the value of the specified element from the extension array.
+ * @throws {Error} If an error occurs while retrieving the element value from the extension.
+ */
   getElementValFromExtension(extension, element) {
     return new Promise((resolve) => {
       let elementValue = ''
@@ -1631,8 +1634,11 @@ class CacheFhirToES {
           let resVersion = data.request.url.split('/').pop()
           let oldUrlArr = data.request.url.split('/')
           oldUrlArr[oldUrlArr.length - 1] = parseInt(resVersion) - 1
-          let url = oldUrlArr.join('/')
-          axios.get(url, {
+          let url = URI(this.FHIRBaseURL)
+          for(let segment of oldUrlArr) {
+            url.segment(segment.toString())
+          }
+          axios.get(url.toString(), {
             headers: {
               'Cache-Control': 'no-cache',
             },
