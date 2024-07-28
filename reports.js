@@ -548,11 +548,13 @@ class CacheFhirToES {
             }
           };
           for (let IDField of IDFields) {
-            mappings.mappings.properties[IDField] = {};
-            mappings.mappings.properties[IDField].type = 'text';
-            mappings.mappings.properties[IDField].fields = {
-              keyword: {
-                type: 'keyword'
+            mappings.mappings.properties[IDField.name] = {};
+            mappings.mappings.properties[IDField.name].type = IDField.type;
+            if(IDField.type === 'text') {
+              mappings.mappings.properties[IDField.name].fields = {
+                keyword: {
+                  type: 'keyword'
+                }
               }
             }
           }
@@ -1346,7 +1348,9 @@ class CacheFhirToES {
                 functionname = functionname.replace(')','')
                 externalCachingModule[functionname](this.lastBeganIndexingTime).then(() => {
                   let newLastEndedIndexingTime = moment().format('Y-MM-DDTHH:mm:ss');
-                  this.updateLastIndexingTime(newLastBeganIndexingTime, newLastEndedIndexingTime, reportDetails.name)
+                  try {
+                    this.updateLastIndexingTime(newLastBeganIndexingTime, newLastEndedIndexingTime, reportDetails.name)
+                  } catch (err) {}
                   return nxtRelationship()
                 }).catch(() => {
                   logger.error('An error occured calling an external caching module');
@@ -1360,9 +1364,37 @@ class CacheFhirToES {
             }
           } else {
             let IDFields = [];
+            for(let element of reportDetails["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+              let type = element.find((el) => {
+                return el.url === 'type'
+              })
+              if(type) {
+                let name = element.find((el) => {
+                  return el.url === 'name'
+                })
+                IDFields.push({
+                  name: name.valueString,
+                  type: type.valueString
+                })
+              }
+            }
             for (let linkIndex1 in links) {
               let link1 = links[linkIndex1];
               let flattenedLink1 = this.flattenComplex(link1.extension);
+              for(let element of flattenedLink1["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+                let type = element.find((el) => {
+                  return el.url === 'type'
+                })
+                if(type) {
+                  let name = element.find((el) => {
+                    return el.url === 'name'
+                  })
+                  IDFields.push({
+                    name: name.valueString,
+                    type: type.valueString
+                  })
+                }
+              }
               let linkTo1 = flattenedLink1.linkTo.split('.')
               let linkToResource1 = linkTo1[0]
               if (linkToResource1 === reportDetails.name) {
@@ -1389,10 +1421,16 @@ class CacheFhirToES {
                     }
                   ],
                 });
-                IDFields.push('__' + flattenedLink1.name + '_link')
+                IDFields.push({
+                  name: '__' + flattenedLink1.name + '_link',
+                  type: "text"
+                })
               }
 
-              IDFields.push(flattenedLink1.name);
+              IDFields.push({
+                name: flattenedLink1.name,
+                type: "text"
+              })
               for (let link2 of links) {
                 let flattenedLink2 = this.flattenComplex(link2.extension);
                 let linkTo2 = flattenedLink2.linkTo.split('.')
@@ -1421,7 +1459,10 @@ class CacheFhirToES {
                       }
                     ],
                   });
-                  IDFields.push('__' + flattenedLink2.name + '_link')
+                  IDFields.push({
+                    name: '__' + flattenedLink2.name + '_link',
+                    type: "text"
+                  })
                 }
               }
             }
@@ -1429,7 +1470,10 @@ class CacheFhirToES {
             this.orderedResources = [];
             // reportDetails.resource = subject._type;
             this.orderedResources.push(reportDetails);
-            IDFields.push(reportDetails.name);
+            IDFields.push({
+              name: reportDetails.name,
+              type: "text"
+            })
             this.getLastIndexingTime(reportDetails.name).then(() => {
               let newLastBeganIndexingTime = moment().format('Y-MM-DDTHH:mm:ss');
               this.updateESScrollContext().then(() => {
