@@ -1608,6 +1608,28 @@ class CacheFhirToES {
                           }
                         );
                       }, () => {
+                        if(reportDetails.postRun) {
+                          logger.info("Executing postRun module")
+                          let mod = reportDetails.postRun.split(".")
+                          if(mod.length !== 2) {
+                            logger.error('invalid definition for postRun module' + reportDetails.postRun);
+                            return nxtRelationship();
+                          }
+                          let functionname = mod[1]
+                          let postRun
+                          try {
+                            postRun = require(this.ESModulesBasePath + "/" + mod[0])
+                          } catch (error) {
+                            logger.error(error);
+                            return nxtRelationship();
+                          }
+                          functionname = functionname.replace('(','')
+                          functionname = functionname.replace(')','')
+                          postRun[functionname](this.lastBeganIndexingTime).catch(() => {
+                            logger.error('An error occured calling postRun module');
+                            return nxtRelationship()
+                          })
+                        }
                         try {
                           let newLastEndedIndexingTime = moment().format('Y-MM-DDTHH:mm:ss');
                           this.updateLastIndexingTime(newLastBeganIndexingTime, newLastEndedIndexingTime, reportDetails.name)
