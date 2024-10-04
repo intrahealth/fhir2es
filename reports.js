@@ -1625,10 +1625,14 @@ class CacheFhirToES {
                           }
                           functionname = functionname.replace('(','')
                           functionname = functionname.replace(')','')
-                          postRun[functionname](this.lastBeganIndexingTime).catch(() => {
+                          postRun[functionname](this.lastBeganIndexingTime).then(() => {
+                            return nxtRelationship();
+                          }).catch(() => {
                             logger.error('An error occured calling postRun module');
                             return nxtRelationship()
                           })
+                        } else {
+                          return nxtRelationship();
                         }
                         try {
                           let newLastEndedIndexingTime = moment().format('Y-MM-DDTHH:mm:ss');
@@ -1636,7 +1640,6 @@ class CacheFhirToES {
                         } catch (error) {
                           logger.error(error);
                         }
-                        return nxtRelationship();
                       });
                     });
                   });
