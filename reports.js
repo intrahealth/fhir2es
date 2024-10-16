@@ -1364,24 +1364,8 @@ class CacheFhirToES {
             }
           } else {
             let IDFields = [];
-            for(let element of reportDetails["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
-              let type = element.find((el) => {
-                return el.url === 'type'
-              })
-              if(type) {
-                let name = element.find((el) => {
-                  return el.url === 'name'
-                })
-                IDFields.push({
-                  name: name.valueString,
-                  type: type.valueString
-                })
-              }
-            }
-            for (let linkIndex1 in links) {
-              let link1 = links[linkIndex1];
-              let flattenedLink1 = this.flattenComplex(link1.extension);
-              for(let element of flattenedLink1["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+            if(reportDetails["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+              for(let element of reportDetails["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
                 let type = element.find((el) => {
                   return el.url === 'type'
                 })
@@ -1393,6 +1377,26 @@ class CacheFhirToES {
                     name: name.valueString,
                     type: type.valueString
                   })
+                }
+              }
+            }
+            for (let linkIndex1 in links) {
+              let link1 = links[linkIndex1];
+              let flattenedLink1 = this.flattenComplex(link1.extension);
+              if(flattenedLink1["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+                for(let element of flattenedLink1["http://ihris.org/fhir/StructureDefinition/iHRISReportElement"]) {
+                  let type = element.find((el) => {
+                    return el.url === 'type'
+                  })
+                  if(type) {
+                    let name = element.find((el) => {
+                      return el.url === 'name'
+                    })
+                    IDFields.push({
+                      name: name.valueString,
+                      type: type.valueString
+                    })
+                  }
                 }
               }
               let linkTo1 = flattenedLink1.linkTo.split('.')
@@ -1626,13 +1630,13 @@ class CacheFhirToES {
                           functionname = functionname.replace('(','')
                           functionname = functionname.replace(')','')
                           postRun[functionname](this.lastBeganIndexingTime).then(() => {
-                            return nxtRelationship();
+                            nxtRelationship();
                           }).catch(() => {
                             logger.error('An error occured calling postRun module');
-                            return nxtRelationship()
+                            nxtRelationship()
                           })
                         } else {
-                          return nxtRelationship();
+                          nxtRelationship();
                         }
                         try {
                           let newLastEndedIndexingTime = moment().format('Y-MM-DDTHH:mm:ss');
