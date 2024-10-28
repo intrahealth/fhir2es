@@ -1893,6 +1893,7 @@ class CacheFhirToES {
                 try {
                   externalfunction = require(this.ESModulesBasePath + "/" + fncn[0])
                 } catch (error) {
+                  logger.error(this.ESModulesBasePath + "/" + fncn[0] + ' Not found');
                   logger.error(error);
                 }
                 try {
