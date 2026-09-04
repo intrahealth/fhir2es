@@ -1988,7 +1988,7 @@ class CacheFhirToES {
             }
             record[field] = recordFieldArr.join('');
           }
-          if(deleteRecord || !record[field]) {
+          if(deleteRecord || record[field] === undefined || record[field] === null || record[field] === '') {
             ctx += `ctx._source['${field}']=null;`;
             if(field.startsWith('__')) {
               let truncateResources = this.getChildrenResources(orderedResource.name)
